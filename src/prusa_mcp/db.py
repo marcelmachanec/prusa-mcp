@@ -90,6 +90,16 @@ DEFAULTS_SETTINGS = {
 
 async def init_db(db: aiosqlite.Connection) -> None:
     await db.executescript(SCHEMA)
+    # Migrate print_log if needed (existing DBs without new columns)
+    for col, typedef in [
+        ("cost_breakdown_json", "TEXT"),
+        ("quoted_price", "REAL"),
+        ("is_quote", "INTEGER NOT NULL DEFAULT 0"),
+    ]:
+        try:
+            await db.execute(f"ALTER TABLE print_log ADD COLUMN {col} {typedef}")
+        except Exception:
+            pass  # Column already exists
     for key, (value, unit) in DEFAULTS_SETTINGS.items():
         await db.execute(
             "INSERT OR IGNORE INTO settings (key, value, unit) VALUES (?, ?, ?)",
