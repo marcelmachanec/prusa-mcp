@@ -299,6 +299,139 @@ async def get_daily_stats(
 
 
 # =============================================================================
+# Cost Calculator Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def quote_print(
+    weight_g: float,
+    print_time_h: float,
+    filament_id: int | None = None,
+    material: str | None = None,
+    prep_level: str = "simple",
+    post_level: str = "simple",
+    markup_pct: float | None = None,
+    quantity: int = 1,
+) -> str:
+    """Calculate a cost estimate for quoting a print job.
+
+    Args:
+        weight_g: Estimated filament weight in grams.
+        print_time_h: Estimated print time in hours.
+        filament_id: Specific spool ID from inventory (for exact pricing).
+        material: Material type for average pricing (PLA, PETG, ABS, etc.).
+        prep_level: Preparation complexity (none/simple/moderate/complex).
+        post_level: Post-processing complexity (none/simple/moderate/complex).
+        markup_pct: Override default markup percentage.
+        quantity: Number of prints (default 1).
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    result = await db.calculate_cost(
+        app.db,
+        weight_g=weight_g,
+        print_time_h=print_time_h,
+        filament_id=filament_id,
+        material=material,
+        prep_level=prep_level,
+        post_level=post_level,
+        markup_pct=markup_pct,
+    )
+    if "error" in result:
+        return json.dumps({"error": result["error"]}, indent=2)
+
+    if quantity > 1:
+        for key in [
+            "filament_cost",
+            "electricity_cost",
+            "depreciation_cost",
+            "prep_cost",
+            "post_cost",
+            "consumables_cost",
+            "subtotal",
+            "with_failures",
+            "suggested_price",
+        ]:
+            result[key] = round(result[key] * quantity, 2)
+        result["quantity"] = quantity
+
+    return json.dumps({"quote": result}, indent=2)
+
+
+@mcp.tool()
+async def calc_print_cost(
+    filament_id: int,
+    weight_g: float,
+    print_time_h: float,
+    filename: str = "unnamed",
+    prep_min: int | None = None,
+    post_min: int | None = None,
+    prep_level: str = "simple",
+    post_level: str = "simple",
+    status: str = "completed",
+    quoted_price: float | None = None,
+    notes: str | None = None,
+) -> str:
+    """Calculate actual print cost, log the print, and deduct filament.
+
+    Args:
+        filament_id: Spool ID used for the print.
+        weight_g: Actual filament weight used in grams.
+        print_time_h: Actual print time in hours.
+        filename: Print job name/filename.
+        prep_min: Actual preparation time in minutes (overrides preset).
+        post_min: Actual post-processing time in minutes (overrides preset).
+        prep_level: Preset level if prep_min not given (none/simple/moderate/complex).
+        post_level: Preset level if post_min not given (none/simple/moderate/complex).
+        status: Print status (completed/failed).
+        quoted_price: Price quoted to customer (for margin tracking).
+        notes: Optional notes.
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+
+    cost = await db.calculate_cost(
+        app.db,
+        weight_g=weight_g,
+        print_time_h=print_time_h,
+        filament_id=filament_id,
+        prep_min=prep_min,
+        post_min=post_min,
+        prep_level=prep_level,
+        post_level=post_level,
+    )
+    if "error" in cost:
+        return json.dumps({"error": cost["error"]}, indent=2)
+
+    duration_s = int(print_time_h * 3600)
+    started_at = datetime.now().isoformat()
+
+    job = await db.log_print(
+        app.db,
+        filename=filename,
+        started_at=started_at,
+        duration_s=duration_s,
+        filament_used_g=weight_g,
+        filament_id=filament_id,
+        status=status,
+        notes=notes,
+        cost_breakdown_json=json.dumps(cost),
+        quoted_price=quoted_price,
+        is_quote=0,
+    )
+
+    result = {
+        "logged": job.to_dict(),
+        "cost_breakdown": cost,
+    }
+    if quoted_price:
+        result["margin"] = round(quoted_price - cost["suggested_price"], 2)
+
+    return json.dumps(result, indent=2)
+
+
+# =============================================================================
 # PrusaLink Tools
 # =============================================================================
 
