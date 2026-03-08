@@ -408,3 +408,88 @@ async def get_daily_stats(
         )
         stats.append(row_dict)
     return stats
+
+
+# --- Cost Calculation ---
+
+
+async def calculate_cost(
+    db: aiosqlite.Connection,
+    *,
+    weight_g: float,
+    print_time_h: float,
+    filament_id: int | None = None,
+    material: str | None = None,
+    prep_level: str = "simple",
+    post_level: str = "simple",
+    prep_min: int | None = None,
+    post_min: int | None = None,
+    markup_pct: float | None = None,
+) -> dict:
+    settings = await get_all_settings(db)
+
+    # Resolve filament cost per kg
+    if filament_id:
+        filament = await get_filament(db, filament_id)
+        if not filament:
+            return {"error": f"Filament {filament_id} not found"}
+        price_per_kg = (filament.price or 0) / (filament.weight_g / 1000)
+    elif material:
+        cursor = await db.execute(
+            "SELECT AVG(price / (weight_g / 1000.0)) FROM filament "
+            "WHERE UPPER(material) = UPPER(?) AND price IS NOT NULL",
+            (material,),
+        )
+        row = await cursor.fetchone()
+        price_per_kg = row[0] if row and row[0] else 0
+    else:
+        return {"error": "Provide filament_id or material"}
+
+    # Resolve prep/post times from presets or overrides
+    if prep_min is None:
+        preset = await get_preset(db, prep_level)
+        prep_min = preset["prep_min"] if preset else 15
+    if post_min is None:
+        preset = await get_preset(db, post_level)
+        post_min = preset["post_min"] if preset else 10
+
+    if markup_pct is None:
+        markup_pct = settings["default_markup_pct"]
+
+    # Calculate cost components
+    filament_cost = (weight_g / 1000) * price_per_kg
+    electricity_cost = (
+        settings["energy_czk_kwh"] * settings["printer_energy_kwh_h"] * print_time_h
+    )
+    depreciation_cost = settings["printer_depreciation_czk_h"] * print_time_h
+    prep_cost = (prep_min / 60) * settings["labor_czk_h"]
+    post_cost = (post_min / 60) * settings["labor_czk_h"]
+    consumables_cost = settings["default_consumables_czk"]
+
+    subtotal = (
+        filament_cost
+        + electricity_cost
+        + depreciation_cost
+        + prep_cost
+        + post_cost
+        + consumables_cost
+    )
+    with_failures = subtotal * (1 + settings["failure_rate_pct"] / 100)
+    suggested_price = with_failures * (1 + markup_pct / 100)
+
+    return {
+        "filament_cost": round(filament_cost, 2),
+        "electricity_cost": round(electricity_cost, 2),
+        "depreciation_cost": round(depreciation_cost, 2),
+        "prep_cost": round(prep_cost, 2),
+        "prep_min": prep_min,
+        "post_cost": round(post_cost, 2),
+        "post_min": post_min,
+        "consumables_cost": round(consumables_cost, 2),
+        "subtotal": round(subtotal, 2),
+        "failure_rate_pct": settings["failure_rate_pct"],
+        "with_failures": round(with_failures, 2),
+        "markup_pct": markup_pct,
+        "suggested_price": round(suggested_price, 2),
+        "currency": "CZK",
+    }
