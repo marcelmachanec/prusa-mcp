@@ -51,12 +51,65 @@ SELECT
 FROM print_log
 GROUP BY date(started_at)
 ORDER BY date DESC;
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value REAL NOT NULL,
+    unit TEXT
+);
 """
+
+
+DEFAULTS_SETTINGS = {
+    "energy_czk_kwh": (3.6, "CZK/kWh"),
+    "labor_czk_h": (250, "CZK/h"),
+    "failure_rate_pct": (10, "%"),
+    "default_markup_pct": (33, "%"),
+    "printer_depreciation_czk_h": (0.52, "CZK/h"),
+    "printer_energy_kwh_h": (0.15, "kWh/h"),
+    "default_consumables_czk": (1, "CZK"),
+}
 
 
 async def init_db(db: aiosqlite.Connection) -> None:
     await db.executescript(SCHEMA)
+    for key, (value, unit) in DEFAULTS_SETTINGS.items():
+        await db.execute(
+            "INSERT OR IGNORE INTO settings (key, value, unit) VALUES (?, ?, ?)",
+            (key, value, unit),
+        )
     await db.commit()
+
+
+# --- Settings CRUD ---
+
+
+async def get_setting(db: aiosqlite.Connection, key: str) -> float | None:
+    cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def set_setting(db: aiosqlite.Connection, key: str, value: float) -> None:
+    await db.execute(
+        "UPDATE settings SET value = ? WHERE key = ?",
+        (value, key),
+    )
+    await db.commit()
+
+
+async def get_all_settings(db: aiosqlite.Connection) -> dict[str, float]:
+    cursor = await db.execute("SELECT key, value, unit FROM settings")
+    rows = await cursor.fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+async def get_all_settings_detailed(
+    db: aiosqlite.Connection,
+) -> dict[str, dict[str, float | str | None]]:
+    cursor = await db.execute("SELECT key, value, unit FROM settings")
+    rows = await cursor.fetchall()
+    return {row[0]: {"value": row[1], "unit": row[2]} for row in rows}
 
 
 # --- Filament CRUD ---
