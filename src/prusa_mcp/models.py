@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 
 
@@ -52,6 +53,9 @@ class PrintJob:
     filament_id: int | None
     status: str
     notes: str | None
+    cost_breakdown_json: str | None
+    quoted_price: float | None
+    is_quote: bool
     created_at: str
 
     def to_dict(self) -> dict:
@@ -73,4 +77,7 @@ class PrintJob:
             "filament_id": self.filament_id,
             "status": self.status,
             "notes": self.notes,
+            "cost_breakdown": json.loads(self.cost_breakdown_json) if self.cost_breakdown_json else None,
+            "quoted_price": self.quoted_price,
+            "is_quote": self.is_quote,
         }

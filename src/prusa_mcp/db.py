@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS print_log (
     filament_id     INTEGER REFERENCES filament(id),
     status          TEXT NOT NULL DEFAULT 'completed',
     notes           TEXT,
+    cost_breakdown_json TEXT,
+    quoted_price    REAL,
+    is_quote        INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -306,13 +309,17 @@ async def log_print(
     filament_id: int | None = None,
     status: str = "completed",
     notes: str | None = None,
+    cost_breakdown_json: str | None = None,
+    quoted_price: float | None = None,
+    is_quote: int = 0,
 ) -> PrintJob:
     cursor = await db.execute(
         """INSERT INTO print_log
            (filename, started_at, finished_at, duration_s,
             filament_used_g, filament_used_m,
-            filament_id, status, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            filament_id, status, notes,
+            cost_breakdown_json, quoted_price, is_quote)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             filename,
             started_at,
@@ -323,6 +330,9 @@ async def log_print(
             filament_id,
             status,
             notes,
+            cost_breakdown_json,
+            quoted_price,
+            is_quote,
         ),
     )
     await db.commit()
