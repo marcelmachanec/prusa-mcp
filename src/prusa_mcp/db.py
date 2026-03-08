@@ -57,7 +57,21 @@ CREATE TABLE IF NOT EXISTS settings (
     value REAL NOT NULL,
     unit TEXT
 );
+
+CREATE TABLE IF NOT EXISTS prep_presets (
+    level TEXT PRIMARY KEY,
+    prep_min INTEGER NOT NULL,
+    post_min INTEGER NOT NULL
+);
 """
+
+
+DEFAULTS_PRESETS = {
+    "none": (5, 3),
+    "simple": (15, 10),
+    "moderate": (22, 38),
+    "complex": (40, 60),
+}
 
 
 DEFAULTS_SETTINGS = {
@@ -78,7 +92,26 @@ async def init_db(db: aiosqlite.Connection) -> None:
             "INSERT OR IGNORE INTO settings (key, value, unit) VALUES (?, ?, ?)",
             (key, value, unit),
         )
+    for level, (prep, post) in DEFAULTS_PRESETS.items():
+        await db.execute(
+            "INSERT OR IGNORE INTO prep_presets (level, prep_min, post_min) VALUES (?, ?, ?)",
+            (level, prep, post),
+        )
     await db.commit()
+
+
+# --- Preset CRUD ---
+
+
+async def get_preset(db: aiosqlite.Connection, level: str) -> dict | None:
+    cursor = await db.execute(
+        "SELECT level, prep_min, post_min FROM prep_presets WHERE level = ?",
+        (level,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    return {"level": row[0], "prep_min": row[1], "post_min": row[2]}
 
 
 # --- Settings CRUD ---
