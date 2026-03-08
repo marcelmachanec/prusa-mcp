@@ -431,6 +431,34 @@ async def calc_print_cost(
     return json.dumps(result, indent=2)
 
 
+@mcp.tool()
+async def get_settings() -> str:
+    """View all calculator settings (energy price, labor rate, markup, etc.)."""
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    settings = await db.get_all_settings_detailed(app.db)
+    return json.dumps({"settings": settings}, indent=2)
+
+
+@mcp.tool()
+async def update_setting(key: str, value: float) -> str:
+    """Update a calculator setting.
+
+    Args:
+        key: Setting key (energy_czk_kwh, labor_czk_h, failure_rate_pct,
+             default_markup_pct, printer_depreciation_czk_h,
+             printer_energy_kwh_h, default_consumables_czk).
+        value: New numeric value.
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    existing = await db.get_setting(app.db, key)
+    if existing is None:
+        return json.dumps({"error": f"Unknown setting: {key}"}, indent=2)
+    await db.set_setting(app.db, key, value)
+    return json.dumps({"updated": {key: value}}, indent=2)
+
+
 # =============================================================================
 # PrusaLink Tools
 # =============================================================================
