@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push:*)",
+      "Read(./.mcp.json)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}
