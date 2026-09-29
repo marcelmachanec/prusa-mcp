@@ -1,6 +1,9 @@
 import json
 from dataclasses import dataclass
 
+VALID_FILAMENT_STATUSES = {"sealed", "active", "low", "empty", "archived"}
+VALID_PRINT_STATUSES = {"completed", "failed", "cancelled"}
+
 
 @dataclass
 class Filament:

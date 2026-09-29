@@ -29,7 +29,7 @@ class PrusaLinkClient:
         try:
             resp = await self.client.get("/api/version")
             return resp.status_code == 200
-        except (httpx.ConnectError, httpx.TimeoutException):
+        except httpx.HTTPError:
             return False
 
     async def close(self) -> None:

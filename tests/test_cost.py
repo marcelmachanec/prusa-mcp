@@ -178,3 +178,26 @@ async def test_calculate_cost_returns_all_keys(db):
     }
     assert set(result.keys()) == expected_keys
     assert result["currency"] == "CZK"
+
+
+@pytest.mark.asyncio
+async def test_calculate_cost_warns_when_no_price(db):
+    filament = await add_filament(
+        db, brand="NoPrice", material="PLA", color="Clear", weight_g=1000, price=None
+    )
+    result = await calculate_cost(
+        db, weight_g=100, print_time_h=1, filament_id=filament.id
+    )
+    assert result["filament_cost"] == 0
+    assert "warning" in result
+
+
+@pytest.mark.asyncio
+async def test_calculate_cost_zero_weight_returns_error(db):
+    filament = await add_filament(
+        db, brand="Broken", material="PLA", color="Red", weight_g=0, price=300
+    )
+    result = await calculate_cost(
+        db, weight_g=100, print_time_h=1, filament_id=filament.id
+    )
+    assert "error" in result

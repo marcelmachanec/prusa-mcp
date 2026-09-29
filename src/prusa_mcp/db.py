@@ -1,6 +1,13 @@
+from datetime import date
+
 import aiosqlite
 
-from prusa_mcp.models import Filament, PrintJob
+from prusa_mcp.models import (
+    VALID_FILAMENT_STATUSES,
+    VALID_PRINT_STATUSES,
+    Filament,
+    PrintJob,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS filament (
@@ -66,6 +73,11 @@ CREATE TABLE IF NOT EXISTS prep_presets (
     prep_min INTEGER NOT NULL,
     post_min INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version     INTEGER PRIMARY KEY,
+    applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -88,18 +100,45 @@ DEFAULTS_SETTINGS = {
 }
 
 
+# Maps schema version → SQL statements to apply in order.
+# Add future migrations here as new version keys — never modify existing ones.
+MIGRATIONS: dict[int, list[str]] = {
+    2: [
+        "ALTER TABLE print_log ADD COLUMN cost_breakdown_json TEXT",
+        "ALTER TABLE print_log ADD COLUMN quoted_price REAL",
+        "ALTER TABLE print_log ADD COLUMN is_quote INTEGER NOT NULL DEFAULT 0",
+    ],
+}
+
+
+async def _apply_migrations(db: aiosqlite.Connection) -> None:
+    """Apply pending schema migrations in version order."""
+    cursor = await db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+    row = await cursor.fetchone()
+    current_version = row[0]
+
+    for version in sorted(MIGRATIONS.keys()):
+        if version <= current_version:
+            continue
+        for sql in MIGRATIONS[version]:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass  # Column already exists (SQLite has no ALTER TABLE IF NOT EXISTS)
+        await db.execute(
+            "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (version,)
+        )
+    await db.commit()
+
+
 async def init_db(db: aiosqlite.Connection) -> None:
+    await db.execute("PRAGMA foreign_keys = ON")
     await db.executescript(SCHEMA)
-    # Migrate print_log if needed (existing DBs without new columns)
-    for col, typedef in [
-        ("cost_breakdown_json", "TEXT"),
-        ("quoted_price", "REAL"),
-        ("is_quote", "INTEGER NOT NULL DEFAULT 0"),
-    ]:
-        try:
-            await db.execute(f"ALTER TABLE print_log ADD COLUMN {col} {typedef}")
-        except Exception:
-            pass  # Column already exists
+    await db.execute(
+        "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (1,)
+    )
+    await db.commit()
+    await _apply_migrations(db)
     for key, (value, unit) in DEFAULTS_SETTINGS.items():
         await db.execute(
             "INSERT OR IGNORE INTO settings (key, value, unit) VALUES (?, ?, ?)",
@@ -193,7 +232,10 @@ async def add_filament(
         ),
     )
     await db.commit()
-    return await get_filament(db, cursor.lastrowid)
+    row_id = cursor.lastrowid
+    if row_id is None:
+        raise RuntimeError("INSERT returned no lastrowid — filament was not created")
+    return await get_filament(db, row_id)
 
 
 async def get_filament(db: aiosqlite.Connection, filament_id: int) -> Filament | None:
@@ -211,6 +253,8 @@ async def list_filaments(
     status: str | None = None,
     material: str | None = None,
     brand: str | None = None,
+    color: str | None = None,
+    include_archived: bool = False,
 ) -> list[Filament]:
     query = "SELECT * FROM filament WHERE 1=1"
     params: list = []
@@ -218,7 +262,7 @@ async def list_filaments(
     if status:
         query += " AND status = ?"
         params.append(status)
-    else:
+    elif not include_archived:
         query += " AND status != 'archived'"
 
     if material:
@@ -228,6 +272,10 @@ async def list_filaments(
     if brand:
         query += " AND UPPER(brand) LIKE UPPER(?)"
         params.append(f"%{brand}%")
+
+    if color:
+        query += " AND UPPER(color) LIKE UPPER(?)"
+        params.append(f"%{color}%")
 
     query += " ORDER BY id"
 
@@ -240,6 +288,8 @@ async def list_filaments(
 async def update_filament(
     db: aiosqlite.Connection,
     filament_id: int,
+    *,
+    clear_fields: list[str] | None = None,
     **fields,
 ) -> Filament | None:
     allowed = {
@@ -256,7 +306,24 @@ async def update_filament(
         "status",
         "notes",
     }
+    if "status" in fields and fields["status"] is not None:
+        if fields["status"] not in VALID_FILAMENT_STATUSES:
+            raise ValueError(
+                f"Invalid filament status '{fields['status']}'. "
+                f"Must be one of: {sorted(VALID_FILAMENT_STATUSES)}"
+            )
+
+    if "remaining_g" in fields and fields["remaining_g"] is not None:
+        current = await get_filament(db, filament_id)
+        if current and current.weight_g > 0:
+            fields["remaining_g"] = min(fields["remaining_g"], current.weight_g)
+
     updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if clear_fields:
+        clearable = {"color_hex", "price", "purchased", "opened", "notes"}
+        for field in clear_fields:
+            if field in clearable:
+                updates[field] = None
     if not updates:
         return await get_filament(db, filament_id)
 
@@ -279,29 +346,40 @@ async def update_filament(
     return await get_filament(db, filament_id)
 
 
-async def use_filament(
+async def _deduct_filament_no_commit(
     db: aiosqlite.Connection, filament_id: int, grams_used: float
-) -> Filament | None:
+) -> None:
+    """UPDATE filament weight/status — no commit. Caller must commit."""
     filament = await get_filament(db, filament_id)
     if not filament:
-        return None
-
+        return
     new_remaining = max(0, filament.remaining_g - grams_used)
-    new_status = filament.status
     if new_remaining == 0:
         new_status = "empty"
     elif new_remaining < filament.weight_g * 0.15:
         new_status = "low"
     elif filament.status == "sealed":
         new_status = "active"
-
-    return await update_filament(
-        db,
-        filament_id,
-        remaining_g=new_remaining,
-        status=new_status,
-        opened=filament.opened or "date('now')",
+    else:
+        new_status = filament.status
+    opened = filament.opened or date.today().isoformat()
+    await db.execute(
+        """UPDATE filament
+           SET remaining_g = ?, status = ?, opened = ?, updated_at = datetime('now')
+           WHERE id = ?""",
+        (new_remaining, new_status, opened, filament_id),
     )
+
+
+async def use_filament(
+    db: aiosqlite.Connection, filament_id: int, grams_used: float
+) -> Filament | None:
+    filament = await get_filament(db, filament_id)
+    if not filament:
+        return None
+    await _deduct_filament_no_commit(db, filament_id, grams_used)
+    await db.commit()
+    return await get_filament(db, filament_id)
 
 
 # --- Print Log CRUD ---
@@ -323,6 +401,12 @@ async def log_print(
     quoted_price: float | None = None,
     is_quote: int = 0,
 ) -> PrintJob:
+    if status not in VALID_PRINT_STATUSES:
+        raise ValueError(
+            f"Invalid print status '{status}'. "
+            f"Must be one of: {sorted(VALID_PRINT_STATUSES)}"
+        )
+
     cursor = await db.execute(
         """INSERT INTO print_log
            (filename, started_at, finished_at, duration_s,
@@ -345,13 +429,15 @@ async def log_print(
             is_quote,
         ),
     )
-    await db.commit()
+    print_id = cursor.lastrowid
 
     # Auto-deduct filament if both filament_id and grams used are provided
-    if filament_id and filament_used_g:
-        await use_filament(db, filament_id, filament_used_g)
+    # filament_id is not None handles ID 0; filament_used_g falsy check is intentional — 0g used is a no-op
+    if filament_id is not None and filament_used_g:
+        await _deduct_filament_no_commit(db, filament_id, filament_used_g)
 
-    return await get_print(db, cursor.lastrowid)
+    await db.commit()  # single commit covers INSERT + optional deduction
+    return await get_print(db, print_id)
 
 
 async def get_print(db: aiosqlite.Connection, print_id: int) -> PrintJob | None:
@@ -370,6 +456,7 @@ async def list_prints(
     status: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    filament_id: int | None = None,
 ) -> list[PrintJob]:
     query = "SELECT * FROM print_log WHERE 1=1"
     params: list = []
@@ -377,12 +464,15 @@ async def list_prints(
     if status:
         query += " AND status = ?"
         params.append(status)
+    if filament_id is not None:
+        query += " AND filament_id = ?"
+        params.append(filament_id)
     if date_from:
         query += " AND started_at >= ?"
         params.append(date_from)
     if date_to:
         query += " AND started_at <= ?"
-        params.append(date_to)
+        params.append(date_to + "T23:59:59")
 
     query += " ORDER BY started_at DESC LIMIT ?"
     params.append(limit)
@@ -430,6 +520,25 @@ async def get_daily_stats(
     return stats
 
 
+async def delete_filament(db: aiosqlite.Connection, filament_id: int) -> dict:
+    filament = await get_filament(db, filament_id)
+    if not filament:
+        return {"error": f"Filament #{filament_id} not found"}
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM print_log WHERE filament_id = ?", (filament_id,)
+    )
+    row = await cursor.fetchone()
+    print_count = row[0]
+    if print_count > 0:
+        return {
+            "error": f"Cannot delete filament #{filament_id} — it has {print_count} "
+            "print log entries. Archive it instead: update_filament(status='archived')."
+        }
+    await db.execute("DELETE FROM filament WHERE id = ?", (filament_id,))
+    await db.commit()
+    return {"deleted": filament_id, "brand": filament.brand, "color": filament.color}
+
+
 # --- Cost Calculation ---
 
 
@@ -449,10 +558,12 @@ async def calculate_cost(
     settings = await get_all_settings(db)
 
     # Resolve filament cost per kg
-    if filament_id:
+    if filament_id is not None:
         filament = await get_filament(db, filament_id)
         if not filament:
             return {"error": f"Filament {filament_id} not found"}
+        if filament.weight_g == 0:
+            return {"error": "Filament weight_g cannot be zero — cannot compute cost per kg"}
         price_per_kg = (filament.price or 0) / (filament.weight_g / 1000)
     elif material:
         cursor = await db.execute(
@@ -497,7 +608,7 @@ async def calculate_cost(
     with_failures = subtotal * (1 + settings["failure_rate_pct"] / 100)
     suggested_price = with_failures * (1 + markup_pct / 100)
 
-    return {
+    result = {
         "filament_cost": round(filament_cost, 2),
         "electricity_cost": round(electricity_cost, 2),
         "depreciation_cost": round(depreciation_cost, 2),
@@ -513,3 +624,8 @@ async def calculate_cost(
         "suggested_price": round(suggested_price, 2),
         "currency": "CZK",
     }
+
+    if filament_id is not None and filament and filament.price is None:
+        result["warning"] = "filament price not set — filament_cost is 0"
+
+    return result

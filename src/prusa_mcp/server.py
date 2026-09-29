@@ -108,6 +108,7 @@ async def update_filament(
     opened: str | None = None,
     status: str | None = None,
     notes: str | None = None,
+    clear_fields: list[str] | None = None,
 ) -> str:
     """Update fields on an existing filament spool.
 
@@ -115,6 +116,8 @@ async def update_filament(
         filament_id: ID of the spool to update
         status: One of: sealed, active, low, empty, archived
         remaining_g: Estimated remaining weight in grams
+        clear_fields: List of nullable fields to explicitly set to NULL (color_hex, price, purchased, opened, notes).
+            Passing a field as None without clear_fields leaves it unchanged — use clear_fields to wipe a value.
         (all other filament fields can also be updated)
     """
     ctx = mcp.get_context()
@@ -122,6 +125,7 @@ async def update_filament(
     filament = await db.update_filament(
         app.db,
         filament_id,
+        clear_fields=clear_fields,
         brand=brand,
         material=material,
         color=color,
@@ -163,6 +167,8 @@ async def list_filaments(
     status: str | None = None,
     material: str | None = None,
     brand: str | None = None,
+    color: str | None = None,
+    include_archived: bool = False,
 ) -> str:
     """List filament spools with optional filters.
 
@@ -170,11 +176,14 @@ async def list_filaments(
         status: Filter by status (sealed/active/low/empty/archived).
         material: Filter by material type (PLA, PETG, ASA, etc.)
         brand: Filter by brand name (partial match)
+        color: Filter by color name (partial match)
+        include_archived: If True, include archived spools (default False)
     """
     ctx = mcp.get_context()
     app: AppContext = ctx.request_context.lifespan_context
     filaments = await db.list_filaments(
-        app.db, status=status, material=material, brand=brand
+        app.db, status=status, material=material, brand=brand,
+        color=color, include_archived=include_archived,
     )
     return json.dumps(
         {"filaments": [f.to_dict() for f in filaments], "count": len(filaments)},
@@ -195,6 +204,55 @@ async def get_filament(filament_id: int) -> str:
     if not filament:
         return json.dumps({"error": f"Filament #{filament_id} not found"})
     return json.dumps({"filament": filament.to_dict()}, indent=2)
+
+
+@mcp.tool()
+async def delete_filament(filament_id: int) -> str:
+    """Permanently delete a filament spool with no print history.
+    If the spool has print log entries, returns an error and suggests archiving.
+
+    Args:
+        filament_id: ID of the spool to delete
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    result = await db.delete_filament(app.db, filament_id)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def add_filaments_bulk(filaments: list[dict]) -> str:
+    """Add multiple filament spools in one call.
+    Each dict accepts: brand (required), material (required), color (required),
+    weight_g, color_hex, price, currency, purchased, notes.
+
+    Args:
+        filaments: List of filament dicts to add
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    added, errors = [], []
+    for i, f in enumerate(filaments):
+        try:
+            filament = await db.add_filament(
+                app.db,
+                brand=f["brand"],
+                material=f["material"],
+                color=f["color"],
+                weight_g=f.get("weight_g", 1000),
+                color_hex=f.get("color_hex"),
+                price=f.get("price"),
+                currency=f.get("currency", "CZK"),
+                purchased=f.get("purchased"),
+                notes=f.get("notes"),
+            )
+            added.append(filament.to_dict())
+        except (KeyError, ValueError) as e:
+            errors.append({"index": i, "error": str(e), "input": f})
+    result = {"added": added, "count": len(added)}
+    if errors:
+        result["errors"] = errors
+    return json.dumps(result, indent=2)
 
 
 # =============================================================================
@@ -269,6 +327,23 @@ async def list_prints(
     prints = await db.list_prints(
         app.db, limit=limit, status=status, date_from=date_from, date_to=date_to
     )
+    return json.dumps(
+        {"prints": [p.to_dict() for p in prints], "count": len(prints)},
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def list_prints_by_spool(filament_id: int, limit: int = 20) -> str:
+    """List all prints that used a specific filament spool.
+
+    Args:
+        filament_id: ID of the spool to query
+        limit: Max results (default 20)
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    prints = await db.list_prints(app.db, filament_id=filament_id, limit=limit)
     return json.dumps(
         {"prints": [p.to_dict() for p in prints], "count": len(prints)},
         indent=2,
@@ -426,7 +501,7 @@ async def calc_print_cost(
         "cost_breakdown": cost,
     }
     if quoted_price:
-        result["margin"] = round(quoted_price - cost["suggested_price"], 2)
+        result["margin"] = round(quoted_price - cost["subtotal"], 2)
 
     return json.dumps(result, indent=2)
 
