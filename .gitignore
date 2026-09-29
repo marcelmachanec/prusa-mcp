@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Secrets and local data (never commit)
+.mcp.json
+.env
+data/*.db
+.agents/ledger.jsonl
