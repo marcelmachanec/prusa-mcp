@@ -352,6 +352,11 @@ async def _deduct_filament_no_commit(
     db: aiosqlite.Connection, filament_id: int, grams_used: float
 ) -> None:
     """UPDATE filament weight/status — no commit. Caller must commit."""
+    if grams_used < 0:
+        raise ValueError("grams_used must be >= 0")
+    if grams_used == 0:
+        return
+
     filament = await get_filament(db, filament_id)
     if not filament:
         return
@@ -376,6 +381,9 @@ async def _deduct_filament_no_commit(
 async def use_filament(
     db: aiosqlite.Connection, filament_id: int, grams_used: float
 ) -> Filament | None:
+    if grams_used < 0:
+        raise ValueError("grams_used must be >= 0")
+
     filament = await get_filament(db, filament_id)
     if not filament:
         return None
@@ -408,6 +416,8 @@ async def log_print(
             f"Invalid print status '{status}'. "
             f"Must be one of: {sorted(VALID_PRINT_STATUSES)}"
         )
+    if filament_used_g is not None and filament_used_g < 0:
+        raise ValueError("filament_used_g must be >= 0")
 
     cursor = await db.execute(
         """INSERT INTO print_log

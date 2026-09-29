@@ -62,6 +62,58 @@ async def test_atomic_deduction(db):
 
 
 @pytest.mark.asyncio
+async def test_use_filament_rejects_negative_grams(db):
+    filament = await add_filament(
+        db, brand="Test", material="PLA", color="Blue", weight_g=1000
+    )
+
+    with pytest.raises(ValueError, match="grams_used must be >= 0"):
+        await use_filament(db, filament.id, -50)
+
+    unchanged = await get_filament(db, filament.id)
+    assert unchanged.remaining_g == filament.remaining_g
+    assert unchanged.status == filament.status
+
+
+@pytest.mark.asyncio
+async def test_log_print_rejects_negative_filament_usage_before_insert(db):
+    filament = await add_filament(
+        db, brand="Test", material="PLA", color="Blue", weight_g=1000
+    )
+
+    with pytest.raises(ValueError, match="filament_used_g must be >= 0"):
+        await log_print(
+            db,
+            filename="negative.gcode",
+            started_at="2026-01-01T10:00:00",
+            filament_id=filament.id,
+            filament_used_g=-50,
+        )
+
+    unchanged = await get_filament(db, filament.id)
+    assert unchanged.remaining_g == filament.remaining_g
+    assert unchanged.status == filament.status
+
+    await db.commit()
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM print_log WHERE filename = ?", ("negative.gcode",)
+    )
+    row = await cursor.fetchone()
+    assert row[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_use_filament_zero_grams_changes_nothing(db):
+    filament = await add_filament(
+        db, brand="Test", material="PLA", color="Blue", weight_g=1000
+    )
+
+    unchanged = await use_filament(db, filament.id, 0)
+
+    assert unchanged == filament
+
+
+@pytest.mark.asyncio
 async def test_status_validation_filament(db):
     filament = await add_filament(
         db, brand="Test", material="PLA", color="Red", weight_g=1000
