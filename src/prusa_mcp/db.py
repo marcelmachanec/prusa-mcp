@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import date
 
 import aiosqlite
@@ -123,8 +124,9 @@ async def _apply_migrations(db: aiosqlite.Connection) -> None:
         for sql in MIGRATIONS[version]:
             try:
                 await db.execute(sql)
-            except Exception:
-                pass  # Column already exists (SQLite has no ALTER TABLE IF NOT EXISTS)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc):
+                    raise
         await db.execute(
             "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (version,)
         )
