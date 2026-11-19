@@ -6,7 +6,7 @@ limits:
   review_rounds: 2
   budget_usd_per_request: 10
 models:
-  intake: claude-fable-5-2
+  intake: claude-opus-5-5
   spec: claude-opus-5-5
   builder: claude-opus-5-5
 paths:
