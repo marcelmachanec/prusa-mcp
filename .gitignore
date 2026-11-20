@@ -14,3 +14,7 @@ wheels/
 .env
 data/*.db
 .agents/ledger.jsonl
+
+# Factory run trails (local only)
+.factory/runs/
+.factory/queue/

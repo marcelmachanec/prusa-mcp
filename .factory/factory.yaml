@@ -1,0 +1,28 @@
+# Factory config for prusa-mcp. Engine: ~/Projects/software-factory
+project: prusa-mcp
+state: github                # github | local
+limits:
+  gate_retries: 3
+  review_rounds: 2
+  budget_usd_per_request: 10
+models:
+  intake: claude-opus-5-5
+  spec: claude-opus-5-5
+  builder: claude-opus-5-5
+paths:
+  ui: []                     # no UI -> UX/UI reviews never run
+  security:
+    - "src/prusa_mcp/prusalink.py"   # talks to the printer over HTTP with the API key
+    - "src/prusa_mcp/migrate.py"
+    - "pyproject.toml"
+    - "uv.lock"
+  no_touch:
+    - "data/**"
+    - ".env"
+    - ".env.*"
+    - ".mcp.json"
+reviewers:
+  code: on
+  ux: off
+  ui: off
+  security: auto
