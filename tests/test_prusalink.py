@@ -85,3 +85,46 @@ async def test_is_online_returns_false_on_connection_error() -> None:
 async def test_client_can_be_created_without_transport() -> None:
     client = PrusaLinkClient("printer.test", "test-key")
     await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overwrite", [False, True])
+async def test_upload_file_request_shape(overwrite: bool) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["headers"] = dict(request.headers)
+        seen["body"] = request.content
+        return httpx.Response(201)
+
+    client = PrusaLinkClient(
+        "printer.test", "test-key", transport=httpx.MockTransport(handler)
+    )
+    try:
+        await client.upload_file("usb", "a.gcode", b"G1 X1\n", overwrite=overwrite)
+    finally:
+        await client.close()
+
+    assert seen["method"] == "PUT"
+    assert seen["path"] == "/api/v1/files/usb/a.gcode"
+    assert seen["headers"]["content-type"] == "application/octet-stream"
+    assert seen["headers"]["overwrite"] == ("?1" if overwrite else "?0")
+    assert seen["headers"]["print-after-upload"] == "?0"
+    assert seen["headers"]["x-api-key"] == "test-key"
+    assert seen["body"] == b"G1 X1\n"
+
+
+@pytest.mark.asyncio
+async def test_upload_file_raises_on_conflict() -> None:
+    client = PrusaLinkClient(
+        "printer.test",
+        "test-key",
+        transport=httpx.MockTransport(lambda r: httpx.Response(409, request=r)),
+    )
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.upload_file("usb", "a.gcode", b"x")
+    finally:
+        await client.close()

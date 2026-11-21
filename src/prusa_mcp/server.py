@@ -8,7 +8,7 @@ from pathlib import Path
 import aiosqlite
 from mcp.server.fastmcp import FastMCP
 
-from prusa_mcp import db
+from prusa_mcp import db, slicer
 from prusa_mcp.prusalink import PrusaLinkClient
 
 PROJECT_DIR = Path(__file__).parent.parent.parent
@@ -647,6 +647,67 @@ async def check_printer_online() -> str:
         )
     online = await app.prusa.is_online()
     return json.dumps({"online": online, "host": os.environ.get("PRUSA_HOST")})
+
+
+@mcp.tool()
+async def slice_model(
+    model_path: str,
+    printer_profile: str,
+    print_profile: str,
+    material_profile: str,
+    output_dir: str | None = None,
+) -> str:
+    """Slice an STL/OBJ with PrusaSlicer and report time, grams and cost.
+
+    Profile arguments are names of presets installed in PrusaSlicer. Writes an
+    ASCII .gcode next to the model unless output_dir is given. Does not upload
+    and never starts a print. Executable: env PRUSA_SLICER_PATH.
+
+    Args:
+        model_path: Path to the model file (.stl or .obj; .3mf is refused).
+        printer_profile: Printer preset name.
+        print_profile: Print (quality) preset name.
+        material_profile: Filament preset name.
+        output_dir: Directory for the G-code (default: the model's directory).
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    try:
+        result = await slicer.slice_model(
+            model_path,
+            printer_profile,
+            print_profile,
+            material_profile,
+            output_dir,
+            db=app.db,
+        )
+    except slicer.SlicerError as e:
+        return json.dumps({"error": str(e)})
+    return json.dumps({"slice": result}, indent=2)
+
+
+@mcp.tool()
+async def upload_gcode(gcode_path: str, overwrite: bool = False) -> str:
+    """Upload a .gcode/.bgcode file to the printer's USB storage.
+
+    Upload only: the print is NEVER started, press start on the printer.
+    Requires PRUSA_HOST and PRUSA_API_KEY environment variables.
+
+    Args:
+        gcode_path: Path to the G-code file.
+        overwrite: Replace a file with the same name if it exists.
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    if not app.prusa:
+        return json.dumps(
+            {"error": "PrusaLink not configured. Set PRUSA_HOST and PRUSA_API_KEY."}
+        )
+    try:
+        result = await slicer.upload_gcode_file(app.prusa, gcode_path, overwrite)
+    except slicer.SlicerError as e:
+        return json.dumps({"error": str(e)})
+    return json.dumps({"upload": result}, indent=2)
 
 
 # =============================================================================

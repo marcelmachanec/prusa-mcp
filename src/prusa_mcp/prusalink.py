@@ -1,4 +1,9 @@
+from urllib.parse import quote
+
 import httpx
+
+# Big ASCII G-code: the printer may need a while to write it to USB.
+UPLOAD_TIMEOUT = httpx.Timeout(10.0, read=120.0, write=120.0)
 
 
 class PrusaLinkClient:
@@ -38,6 +43,26 @@ class PrusaLinkClient:
             return resp.status_code == 200
         except httpx.HTTPError:
             return False
+
+    async def upload_file(
+        self,
+        storage: str,
+        remote_name: str,
+        data: bytes,
+        overwrite: bool = False,
+    ) -> None:
+        """Upload a file to PrusaLink storage. Never starts a print."""
+        resp = await self.client.put(
+            f"/api/v1/files/{quote(storage, safe='')}/{quote(remote_name, safe='')}",
+            content=data,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Overwrite": "?1" if overwrite else "?0",
+                "Print-After-Upload": "?0",
+            },
+            timeout=UPLOAD_TIMEOUT,
+        )
+        resp.raise_for_status()
 
     async def close(self) -> None:
         await self.client.aclose()

@@ -31,6 +31,7 @@ Register it with your MCP client (e.g. `.mcp.json` for Claude Code):
 | `PRUSA_HOST` | for printer tools | PrusaLink address of the printer |
 | `PRUSA_API_KEY` | for printer tools | PrusaLink API key |
 | `PRUSA_MCP_DB_PATH` | no | SQLite path (default `data/prints.db`) |
+| `PRUSA_SLICER_PATH` | no | `prusa-slicer-console.exe` (default: `C:/Program Files/Prusa3D/PrusaSlicer/`) |
 
 Filament and print-log tools work without the printer; only the three printer
 tools need `PRUSA_HOST` / `PRUSA_API_KEY`. Give the printer a DHCP reservation
@@ -45,6 +46,8 @@ so its IP doesn't change.
   `shopping_list`, `monthly_report`
 - **Cost:** `quote_print`, `calc_print_cost`, `get_settings`, `update_setting`
 - **Printer:** `get_printer_status`, `get_current_job`, `check_printer_online`
+- **Slice & send:** `slice_model` (PrusaSlicer CLI, ASCII G-code, time/grams/cost),
+  `upload_gcode` (to printer USB; never starts a print)
 
 Resources: `print3d://filament/inventory`, `print3d://filament/{filament_id}`,
 `print3d://stats/today`, `print3d://stats/week`, `print3d://printer/status`.
