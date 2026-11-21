@@ -230,6 +230,25 @@ async def test_slice_model_refuses_non_geometry_models(
 
 
 @pytest.mark.asyncio
+async def test_slice_model_dash_names_cannot_become_options(
+    monkeypatch, tmp_path, exe, conn
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path / "-evil.stl", "solid c\nendsolid c\n")
+    calls = _patch_exec(monkeypatch, lambda a: FakeProc(returncode=1))
+    with pytest.raises(slicer.SlicerError):
+        await slicer.slice_model(
+            "-evil.stl", **PROFILES, output_dir="-out", db=conn, slicer_path=exe
+        )
+    args = calls[0][0]
+    assert args[-1] == str(tmp_path / "-evil.stl")
+    assert Path(args[args.index("--output") + 1]).is_absolute()
+    assert not any(
+        a.startswith("-") for a in (args[-1], args[args.index("--output") + 1])
+    )
+
+
+@pytest.mark.asyncio
 async def test_slice_model_cancel_kills_process(monkeypatch, model, exe, conn) -> None:
     proc = FakeProc(hang=True)
     _patch_exec(monkeypatch, lambda a: proc)

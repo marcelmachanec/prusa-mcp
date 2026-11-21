@@ -106,7 +106,8 @@ async def slice_model(
             f"PrusaSlicer not found at {exe}. Set PRUSA_SLICER_PATH to the "
             "prusa-slicer-console.exe location."
         )
-    model = Path(model_path)
+    # Absolute paths never start with '-', so the CLI can't read them as options.
+    model = Path(model_path).resolve()
     if not model.is_file():
         raise SlicerError(f"Model file not found: {model_path}")
     if model.suffix.lower() not in MODEL_SUFFIXES:
@@ -114,7 +115,7 @@ async def slice_model(
             f"Unsupported model type {model.suffix!r}; need .stl or .obj "
             "(.3mf/.amf can carry scripts and are refused - export an STL)."
         )
-    out_dir = Path(output_dir) if output_dir else model.parent
+    out_dir = Path(output_dir).resolve() if output_dir else model.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{model.stem}.gcode"
 
