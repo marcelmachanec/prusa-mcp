@@ -2,12 +2,19 @@ import httpx
 
 
 class PrusaLinkClient:
-    def __init__(self, host: str, api_key: str):
+    def __init__(
+        self,
+        host: str,
+        api_key: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         self.base_url = f"http://{host}"
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             headers={"X-Api-Key": api_key},
             timeout=10.0,
+            transport=transport,
         )
 
     async def get_printer(self) -> dict:
