@@ -118,6 +118,8 @@ async def slice_model(
     out_dir = Path(output_dir).absolute() if output_dir else model.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{model.stem}.gcode"
+    # Drop a previous slice so a run that writes nothing can't report stale stats.
+    out_path.unlink(missing_ok=True)
 
     cmd = build_command(
         exe,

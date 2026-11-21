@@ -282,6 +282,12 @@ async def test_monthly_report_defaults_to_current_month(db):
 
 
 @pytest.mark.asyncio
+async def test_monthly_report_normalises_unpadded_month(db):
+    r = await monthly_report(db, "2020-1")
+    assert r["month"] == "2020-01"
+
+
+@pytest.mark.asyncio
 async def test_monthly_report_rejects_bad_month(db):
     with pytest.raises(ValueError):
         await monthly_report(db, "October")

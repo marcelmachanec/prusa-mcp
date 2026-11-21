@@ -499,7 +499,8 @@ async def monthly_report(db: aiosqlite.Connection, month: str | None = None) -> 
     if month is None:
         month = date.today().strftime("%Y-%m")
     try:
-        datetime.strptime(month, "%Y-%m")
+        # Normalise "2026-1" to "2026-01" so it matches stored ISO dates.
+        month = datetime.strptime(month, "%Y-%m").strftime("%Y-%m")
     except ValueError:
         raise ValueError(f"month must be YYYY-MM, got '{month}'") from None
 
@@ -733,8 +734,7 @@ async def calculate_cost(
             return {"error": f"Filament {filament_id} not found"}
         if filament.weight_g == 0:
             return {
-                "error": "Filament weight_g cannot be zero — "
-                "cannot compute cost per kg"
+                "error": "Filament weight_g cannot be zero — cannot compute cost per kg"
             }
         price_per_kg = (filament.price or 0) / (filament.weight_g / 1000)
     elif material:

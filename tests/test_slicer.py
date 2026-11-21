@@ -270,6 +270,14 @@ async def test_slice_model_keeps_symlink_name(monkeypatch, tmp_path, exe, conn) 
 
 
 @pytest.mark.asyncio
+async def test_slice_model_ignores_stale_output(monkeypatch, model, exe, conn) -> None:
+    _write(model.parent / "cube.gcode", "G1\n" + SAMPLE_TAIL)
+    _patch_exec(monkeypatch, lambda a: FakeProc())  # exits 0, writes nothing
+    with pytest.raises(slicer.SlicerError, match="wrote no"):
+        await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
+
+
+@pytest.mark.asyncio
 async def test_slice_model_cancel_kills_process(monkeypatch, model, exe, conn) -> None:
     proc = FakeProc(hang=True)
     _patch_exec(monkeypatch, lambda a: proc)
