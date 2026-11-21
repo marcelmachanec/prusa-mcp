@@ -116,8 +116,10 @@ async def update_filament(
         filament_id: ID of the spool to update
         status: One of: sealed, active, low, empty, archived
         remaining_g: Estimated remaining weight in grams
-        clear_fields: List of nullable fields to explicitly set to NULL (color_hex, price, purchased, opened, notes).
-            Passing a field as None without clear_fields leaves it unchanged — use clear_fields to wipe a value.
+        clear_fields: List of nullable fields to explicitly set to NULL
+            (color_hex, price, purchased, opened, notes). Passing a field as None
+            without clear_fields leaves it unchanged — use clear_fields to wipe a
+            value.
         (all other filament fields can also be updated)
     """
     ctx = mcp.get_context()

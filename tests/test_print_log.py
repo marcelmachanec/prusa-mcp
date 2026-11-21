@@ -23,9 +23,24 @@ async def test_list_prints_by_spool(db):
     spool_a = await add_filament(db, brand="A", material="PLA", color="Red")
     spool_b = await add_filament(db, brand="B", material="PLA", color="Blue")
 
-    await log_print(db, filename="a1.gcode", started_at="2026-01-01T10:00:00", filament_id=spool_a.id)
-    await log_print(db, filename="a2.gcode", started_at="2026-01-01T11:00:00", filament_id=spool_a.id)
-    await log_print(db, filename="b1.gcode", started_at="2026-01-01T12:00:00", filament_id=spool_b.id)
+    await log_print(
+        db,
+        filename="a1.gcode",
+        started_at="2026-01-01T10:00:00",
+        filament_id=spool_a.id,
+    )
+    await log_print(
+        db,
+        filename="a2.gcode",
+        started_at="2026-01-01T11:00:00",
+        filament_id=spool_a.id,
+    )
+    await log_print(
+        db,
+        filename="b1.gcode",
+        started_at="2026-01-01T12:00:00",
+        filament_id=spool_b.id,
+    )
 
     prints_a = await list_prints(db, filament_id=spool_a.id)
     assert len(prints_a) == 2
@@ -49,9 +64,26 @@ async def test_list_prints_date_range(db):
 async def test_list_prints_combined_filters(db):
     spool = await add_filament(db, brand="A", material="PLA", color="Red")
 
-    await log_print(db, filename="ok.gcode", started_at="2026-01-01T10:00:00", filament_id=spool.id, status="completed")
-    await log_print(db, filename="fail.gcode", started_at="2026-01-01T11:00:00", filament_id=spool.id, status="failed")
-    await log_print(db, filename="other.gcode", started_at="2026-01-01T12:00:00", status="completed")
+    await log_print(
+        db,
+        filename="ok.gcode",
+        started_at="2026-01-01T10:00:00",
+        filament_id=spool.id,
+        status="completed",
+    )
+    await log_print(
+        db,
+        filename="fail.gcode",
+        started_at="2026-01-01T11:00:00",
+        filament_id=spool.id,
+        status="failed",
+    )
+    await log_print(
+        db,
+        filename="other.gcode",
+        started_at="2026-01-01T12:00:00",
+        status="completed",
+    )
 
     prints = await list_prints(db, filament_id=spool.id, status="completed")
     assert len(prints) == 1

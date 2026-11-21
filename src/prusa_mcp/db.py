@@ -148,7 +148,8 @@ async def init_db(db: aiosqlite.Connection) -> None:
         )
     for level, (prep, post) in DEFAULTS_PRESETS.items():
         await db.execute(
-            "INSERT OR IGNORE INTO prep_presets (level, prep_min, post_min) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO prep_presets "
+            "(level, prep_min, post_min) VALUES (?, ?, ?)",
             (level, prep, post),
         )
     await db.commit()
@@ -308,12 +309,15 @@ async def update_filament(
         "status",
         "notes",
     }
-    if "status" in fields and fields["status"] is not None:
-        if fields["status"] not in VALID_FILAMENT_STATUSES:
-            raise ValueError(
-                f"Invalid filament status '{fields['status']}'. "
-                f"Must be one of: {sorted(VALID_FILAMENT_STATUSES)}"
-            )
+    if (
+        "status" in fields
+        and fields["status"] is not None
+        and fields["status"] not in VALID_FILAMENT_STATUSES
+    ):
+        raise ValueError(
+            f"Invalid filament status '{fields['status']}'. "
+            f"Must be one of: {sorted(VALID_FILAMENT_STATUSES)}"
+        )
 
     if "remaining_g" in fields and fields["remaining_g"] is not None:
         current = await get_filament(db, filament_id)
@@ -444,7 +448,8 @@ async def log_print(
     print_id = cursor.lastrowid
 
     # Auto-deduct filament if both filament_id and grams used are provided
-    # filament_id is not None handles ID 0; filament_used_g falsy check is intentional — 0g used is a no-op
+    # filament_id is not None handles ID 0; filament_used_g falsy check is
+    # intentional — 0g used is a no-op
     if filament_id is not None and filament_used_g:
         await _deduct_filament_no_commit(db, filament_id, filament_used_g)
 
@@ -575,7 +580,10 @@ async def calculate_cost(
         if not filament:
             return {"error": f"Filament {filament_id} not found"}
         if filament.weight_g == 0:
-            return {"error": "Filament weight_g cannot be zero — cannot compute cost per kg"}
+            return {
+                "error": "Filament weight_g cannot be zero — "
+                "cannot compute cost per kg"
+            }
         price_per_kg = (filament.price or 0) / (filament.weight_g / 1000)
     elif material:
         cursor = await db.execute(

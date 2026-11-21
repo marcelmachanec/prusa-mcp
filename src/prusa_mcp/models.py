@@ -80,7 +80,11 @@ class PrintJob:
             "filament_id": self.filament_id,
             "status": self.status,
             "notes": self.notes,
-            "cost_breakdown": json.loads(self.cost_breakdown_json) if self.cost_breakdown_json else None,
+            "cost_breakdown": (
+                json.loads(self.cost_breakdown_json)
+                if self.cost_breakdown_json
+                else None
+            ),
             "quoted_price": self.quoted_price,
             "is_quote": self.is_quote,
         }

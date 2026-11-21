@@ -201,7 +201,9 @@ async def test_add_filaments_bulk(db):
     ]
     added = []
     for s in spools:
-        f = await add_filament(db, brand=s["brand"], material=s["material"], color=s["color"])
+        f = await add_filament(
+            db, brand=s["brand"], material=s["material"], color=s["color"]
+        )
         added.append(f)
     assert len(added) == 3
     all_filaments = await list_filaments(db)
