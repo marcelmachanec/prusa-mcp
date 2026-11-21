@@ -249,6 +249,27 @@ async def test_slice_model_dash_names_cannot_become_options(
 
 
 @pytest.mark.asyncio
+async def test_slice_model_keeps_symlink_name(monkeypatch, tmp_path, exe, conn) -> None:
+    (tmp_path / "library").mkdir()
+    target = _write(tmp_path / "library" / "cube.stl", "solid c\nendsolid c\n")
+    link = tmp_path / "imports" / "job.stl"
+    link.parent.mkdir()
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks not permitted here")
+
+    def factory(args):
+        out = Path(args[args.index("--output") + 1])
+        return FakeProc(on_run=lambda: _write(out, "G1\n"))
+
+    calls = _patch_exec(monkeypatch, factory)
+    result = await slicer.slice_model(str(link), **PROFILES, db=conn, slicer_path=exe)
+    assert result["gcode_path"] == str(tmp_path / "imports" / "job.gcode")
+    assert calls[0][0][-1] == str(link)
+
+
+@pytest.mark.asyncio
 async def test_slice_model_cancel_kills_process(monkeypatch, model, exe, conn) -> None:
     proc = FakeProc(hang=True)
     _patch_exec(monkeypatch, lambda a: proc)
