@@ -1,5 +1,6 @@
+import json
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import aiosqlite
 
@@ -98,7 +99,11 @@ DEFAULTS_SETTINGS = {
     "printer_depreciation_czk_h": (0.52, "CZK/h"),
     "printer_energy_kwh_h": (0.15, "kWh/h"),
     "default_consumables_czk": (1, "CZK"),
+    "default_spool_tare_g": (200, "g"),
 }
+
+# A spool below this fraction of its nominal weight counts as "low".
+LOW_THRESHOLD = 0.15
 
 
 # Maps schema version → SQL statements to apply in order.
@@ -108,6 +113,9 @@ MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE print_log ADD COLUMN cost_breakdown_json TEXT",
         "ALTER TABLE print_log ADD COLUMN quoted_price REAL",
         "ALTER TABLE print_log ADD COLUMN is_quote INTEGER NOT NULL DEFAULT 0",
+    ],
+    3: [
+        "ALTER TABLE filament ADD COLUMN tare_g REAL",
     ],
 }
 
@@ -136,9 +144,7 @@ async def _apply_migrations(db: aiosqlite.Connection) -> None:
 async def init_db(db: aiosqlite.Connection) -> None:
     await db.execute("PRAGMA foreign_keys = ON")
     await db.executescript(SCHEMA)
-    await db.execute(
-        "INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (1,)
-    )
+    await db.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (1,))
     await db.commit()
     await _apply_migrations(db)
     for key, (value, unit) in DEFAULTS_SETTINGS.items():
@@ -352,6 +358,21 @@ async def update_filament(
     return await get_filament(db, filament_id)
 
 
+def _status_for(remaining_g: float, weight_g: float, current: str) -> str:
+    """Single owner of the spool status rule (used by deduction and weigh-in).
+
+    0 g -> empty; < LOW_THRESHOLD of weight_g -> low; sealed -> active;
+    a previously low/empty spool that is back above the threshold -> active.
+    """
+    if remaining_g <= 0:
+        return "empty"
+    if remaining_g < weight_g * LOW_THRESHOLD:
+        return "low"
+    if current in ("sealed", "low", "empty"):
+        return "active"
+    return current
+
+
 async def _deduct_filament_no_commit(
     db: aiosqlite.Connection, filament_id: int, grams_used: float
 ) -> None:
@@ -365,14 +386,7 @@ async def _deduct_filament_no_commit(
     if not filament:
         return
     new_remaining = max(0, filament.remaining_g - grams_used)
-    if new_remaining == 0:
-        new_status = "empty"
-    elif new_remaining < filament.weight_g * 0.15:
-        new_status = "low"
-    elif filament.status == "sealed":
-        new_status = "active"
-    else:
-        new_status = filament.status
+    new_status = _status_for(new_remaining, filament.weight_g, filament.status)
     opened = filament.opened or date.today().isoformat()
     await db.execute(
         """UPDATE filament
@@ -394,6 +408,144 @@ async def use_filament(
     await _deduct_filament_no_commit(db, filament_id, grams_used)
     await db.commit()
     return await get_filament(db, filament_id)
+
+
+async def weigh_spool(
+    db: aiosqlite.Connection,
+    filament_id: int,
+    gross_g: float,
+    tare_g: float | None = None,
+) -> Filament | None:
+    """Set remaining_g from a kitchen-scale weighing (gross = spool + filament).
+
+    Tare precedence: tare_g argument (stored on the spool) -> stored tare_g ->
+    default_spool_tare_g setting.
+    """
+    if gross_g < 0:
+        raise ValueError("gross_g must be >= 0")
+    if tare_g is not None and tare_g < 0:
+        raise ValueError("tare_g must be >= 0")
+
+    filament = await get_filament(db, filament_id)
+    if not filament:
+        return None
+
+    if tare_g is not None:
+        tare = tare_g
+    elif filament.tare_g is not None:
+        tare = filament.tare_g
+    else:
+        default = await get_setting(db, "default_spool_tare_g")
+        tare = (
+            default
+            if default is not None
+            else DEFAULTS_SETTINGS["default_spool_tare_g"][0]
+        )
+
+    remaining = min(max(gross_g - tare, 0), filament.weight_g)
+    if filament.status == "sealed" and gross_g >= filament.weight_g + tare:
+        new_status = "sealed"  # still full and unopened
+        opened = filament.opened
+    else:
+        new_status = _status_for(remaining, filament.weight_g, filament.status)
+        opened = filament.opened or date.today().isoformat()
+
+    await db.execute(
+        """UPDATE filament
+           SET remaining_g = ?, status = ?, opened = ?, tare_g = ?,
+               updated_at = datetime('now')
+           WHERE id = ?""",
+        (
+            remaining,
+            new_status,
+            opened,
+            tare_g if tare_g is not None else filament.tare_g,
+            filament_id,
+        ),
+    )
+    await db.commit()
+    return await get_filament(db, filament_id)
+
+
+async def shopping_list(db: aiosqlite.Connection) -> dict:
+    """Low/empty spools to rebuy, plus stock and 90-day usage per material."""
+    spools = await list_filaments(db)  # archived excluded
+    to_buy = [f.to_dict() for f in spools if f.status in ("low", "empty")]
+
+    stock: dict[str, dict] = {}
+    for f in spools:
+        entry = stock.setdefault(f.material, {"spools": 0, "remaining_g": 0.0})
+        entry["spools"] += 1
+        entry["remaining_g"] += f.remaining_g
+
+    since = (date.today() - timedelta(days=90)).isoformat()
+    cursor = await db.execute(
+        """SELECT f.material, SUM(p.filament_used_g)
+           FROM print_log p JOIN filament f ON f.id = p.filament_id
+           WHERE p.is_quote = 0 AND p.filament_used_g IS NOT NULL
+             AND date(p.started_at) >= ?
+           GROUP BY f.material""",
+        (since,),
+    )
+    used = {row[0]: row[1] for row in await cursor.fetchall()}
+    return {"to_buy": to_buy, "stock_by_material": stock, "used_last_90d_g": used}
+
+
+async def monthly_report(db: aiosqlite.Connection, month: str | None = None) -> dict:
+    """Totals for one calendar month (YYYY-MM, default current). Quotes excluded.
+
+    cost = sum of `subtotal` from cost_breakdown_json where present, else None.
+    """
+    if month is None:
+        month = date.today().strftime("%Y-%m")
+    try:
+        datetime.strptime(month, "%Y-%m")
+    except ValueError:
+        raise ValueError(f"month must be YYYY-MM, got '{month}'") from None
+
+    cursor = await db.execute(
+        """SELECT p.status, p.duration_s, p.filament_used_g,
+                  p.cost_breakdown_json, f.material
+           FROM print_log p LEFT JOIN filament f ON f.id = p.filament_id
+           WHERE p.is_quote = 0 AND substr(p.started_at, 1, 7) = ?""",
+        (month,),
+    )
+    rows = await cursor.fetchall()
+
+    counts = {"completed": 0, "failed": 0, "cancelled": 0}
+    seconds = 0
+    grams = 0.0
+    cost: float | None = None
+    by_material: dict[str, dict] = {}
+    for status, duration_s, used_g, breakdown, material in rows:
+        counts[status] = counts.get(status, 0) + 1
+        seconds += duration_s or 0
+        grams += used_g or 0
+        if breakdown:
+            try:
+                subtotal = json.loads(breakdown).get("subtotal")
+            except (ValueError, AttributeError):
+                subtotal = None
+            if isinstance(subtotal, int | float):
+                cost = (cost or 0) + subtotal
+        if material is not None:
+            entry = by_material.setdefault(material, {"prints": 0, "filament_g": 0.0})
+            entry["prints"] += 1
+            entry["filament_g"] = round(entry["filament_g"] + (used_g or 0), 1)
+
+    total = len(rows)
+    return {
+        "month": month,
+        "prints": total,
+        "completed": counts["completed"],
+        "failed": counts["failed"],
+        "cancelled": counts["cancelled"],
+        "failure_rate_pct": round(counts["failed"] / total * 100, 1) if total else 0,
+        "print_hours": round(seconds / 3600, 2),
+        "filament_g": round(grams, 1),
+        "cost": round(cost, 2) if cost is not None else None,
+        "by_material": by_material,
+    }
 
 
 # --- Print Log CRUD ---

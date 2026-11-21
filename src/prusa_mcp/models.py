@@ -22,6 +22,7 @@ class Filament:
     notes: str | None
     created_at: str
     updated_at: str
+    tare_g: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -41,6 +42,7 @@ class Filament:
             "opened": self.opened,
             "status": self.status,
             "notes": self.notes,
+            "tare_g": self.tare_g,
         }
 
 

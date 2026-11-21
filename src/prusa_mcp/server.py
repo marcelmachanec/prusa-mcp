@@ -165,6 +165,56 @@ async def use_filament(filament_id: int, grams_used: float) -> str:
 
 
 @mcp.tool()
+async def weigh_spool(
+    filament_id: int, gross_g: float, tare_g: float | None = None
+) -> str:
+    """Set a spool's remaining weight from a kitchen-scale weighing.
+
+    remaining_g = gross_g - tare (clamped to 0..weight_g). Tare is the empty spool's
+    weight: the tare_g argument (stored on the spool) -> the spool's stored tare ->
+    the default_spool_tare_g setting. Use tare_g=0 for spoolless refills.
+
+    Args:
+        filament_id: ID of the spool
+        gross_g: Measured weight of spool + filament in grams
+        tare_g: Empty spool weight in grams (optional; remembered for next time)
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    try:
+        filament = await db.weigh_spool(app.db, filament_id, gross_g, tare_g)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    if not filament:
+        return json.dumps({"error": f"Filament #{filament_id} not found"})
+    return json.dumps({"updated": filament.to_dict()}, indent=2)
+
+
+@mcp.tool()
+async def shopping_list() -> str:
+    """What to buy: low/empty spools, plus stock and 90-day usage per material."""
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    return json.dumps(await db.shopping_list(app.db), indent=2)
+
+
+@mcp.tool()
+async def monthly_report(month: str | None = None) -> str:
+    """Prints, hours, grams, cost and failure rate for one month (quotes excluded).
+
+    Args:
+        month: Month as YYYY-MM (default: current month)
+    """
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    try:
+        report = await db.monthly_report(app.db, month)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    return json.dumps(report, indent=2)
+
+
+@mcp.tool()
 async def list_filaments(
     status: str | None = None,
     material: str | None = None,
@@ -184,8 +234,12 @@ async def list_filaments(
     ctx = mcp.get_context()
     app: AppContext = ctx.request_context.lifespan_context
     filaments = await db.list_filaments(
-        app.db, status=status, material=material, brand=brand,
-        color=color, include_archived=include_archived,
+        app.db,
+        status=status,
+        material=material,
+        brand=brand,
+        color=color,
+        include_archived=include_archived,
     )
     return json.dumps(
         {"filaments": [f.to_dict() for f in filaments], "count": len(filaments)},

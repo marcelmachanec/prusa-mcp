@@ -41,6 +41,8 @@ so its IP doesn't change.
 - **Filament:** `add_filament`, `add_filaments_bulk`, `update_filament`,
   `use_filament`, `list_filaments`, `get_filament`, `delete_filament`
 - **Prints:** `log_print`, `list_prints`, `list_prints_by_spool`, `get_daily_stats`
+- **Spool truth:** `weigh_spool` (scale weight minus empty-spool tare, default 200 g),
+  `shopping_list`, `monthly_report`
 - **Cost:** `quote_print`, `calc_print_cost`, `get_settings`, `update_setting`
 - **Printer:** `get_printer_status`, `get_current_job`, `check_printer_online`
 
