@@ -363,7 +363,10 @@ def _status_for(remaining_g: float, weight_g: float, current: str) -> str:
 
     0 g -> empty; < LOW_THRESHOLD of weight_g -> low; sealed -> active;
     a previously low/empty spool that is back above the threshold -> active.
+    An archived spool stays archived: only an explicit update brings it back.
     """
+    if current == "archived":
+        return "archived"
     if remaining_g <= 0:
         return "empty"
     if remaining_g < weight_g * LOW_THRESHOLD:

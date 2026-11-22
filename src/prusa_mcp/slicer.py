@@ -116,15 +116,20 @@ async def slice_model(
             "(.3mf/.amf can carry scripts and are refused - export an STL)."
         )
     out_dir = Path(output_dir).absolute() if output_dir else model.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise SlicerError(f"Cannot use output_dir {output_dir}: {e}") from None
     out_path = out_dir / f"{model.stem}.gcode"
-    # Drop a previous slice so a run that writes nothing can't report stale stats.
-    out_path.unlink(missing_ok=True)
+    # Slice into a temp file and swap it in only on success: a failed run keeps
+    # the last good G-code, and a run that writes nothing can't report stale stats.
+    tmp_path = out_dir / f"{model.stem}.partial.gcode"
+    tmp_path.unlink(missing_ok=True)
 
     cmd = build_command(
         exe,
         str(model),
-        str(out_path),
+        str(tmp_path),
         printer_profile=printer_profile,
         print_profile=print_profile,
         material_profile=material_profile,
@@ -139,6 +144,7 @@ async def slice_model(
     except TimeoutError:
         proc.kill()
         await proc.wait()
+        tmp_path.unlink(missing_ok=True)
         raise SlicerError(f"Slicing timed out after {timeout:g} s") from None
     except asyncio.CancelledError:
         proc.kill()
@@ -147,9 +153,11 @@ async def slice_model(
 
     if proc.returncode != 0:
         tail = stderr.decode("utf-8", errors="replace")[-STDERR_TAIL_CHARS:]
+        tmp_path.unlink(missing_ok=True)
         raise SlicerError(f"PrusaSlicer failed (exit {proc.returncode}): {tail}")
-    if not out_path.is_file():
+    if not tmp_path.is_file():
         raise SlicerError(f"PrusaSlicer reported success but wrote no {out_path}")
+    os.replace(tmp_path, out_path)
 
     stats = parse_gcode_stats(out_path)
     cost = None

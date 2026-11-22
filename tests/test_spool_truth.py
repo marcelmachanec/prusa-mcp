@@ -127,6 +127,15 @@ async def test_weigh_unknown_spool_returns_none(db):
 
 
 @pytest.mark.asyncio
+async def test_weigh_archived_spool_stays_archived(db):
+    spool = await _spool(db)
+    await update_filament(db, spool.id, status="archived")
+    result = await weigh_spool(db, spool.id, 250)  # 50 g left -> would be "low"
+    assert result.status == "archived"
+    assert (await shopping_list(db))["to_buy"] == []
+
+
+@pytest.mark.asyncio
 async def test_weigh_uses_default_tare_setting(db):
     await db.execute(
         "UPDATE settings SET value = 100 WHERE key = 'default_spool_tare_g'"

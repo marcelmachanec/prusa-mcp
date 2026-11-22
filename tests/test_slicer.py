@@ -278,6 +278,40 @@ async def test_slice_model_ignores_stale_output(monkeypatch, model, exe, conn) -
 
 
 @pytest.mark.asyncio
+async def test_slice_model_failure_keeps_last_good_gcode(
+    monkeypatch, model, exe, conn
+) -> None:
+    good = _write(model.parent / "cube.gcode", "G1\n" + SAMPLE_TAIL)
+
+    def factory(args):
+        out = Path(args[args.index("--output") + 1])
+        return FakeProc(1, stderr=b"BOOM", on_run=lambda: _write(out, "half"))
+
+    _patch_exec(monkeypatch, factory)
+    with pytest.raises(slicer.SlicerError, match="BOOM"):
+        await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
+    assert good.read_text(encoding="utf-8") == "G1\n" + SAMPLE_TAIL
+    assert not (model.parent / "cube.partial.gcode").exists()
+
+
+@pytest.mark.asyncio
+async def test_slice_model_bad_output_dir_is_slicer_error(
+    monkeypatch, tmp_path, model, exe, conn
+) -> None:
+    blocker = _write(tmp_path / "afile", "x")  # a file where a folder must go
+    calls = _patch_exec(monkeypatch, lambda a: FakeProc())
+    with pytest.raises(slicer.SlicerError, match="output_dir"):
+        await slicer.slice_model(
+            str(model),
+            **PROFILES,
+            output_dir=str(blocker / "sub"),
+            db=conn,
+            slicer_path=exe,
+        )
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_slice_model_cancel_kills_process(monkeypatch, model, exe, conn) -> None:
     proc = FakeProc(hang=True)
     _patch_exec(monkeypatch, lambda a: proc)
