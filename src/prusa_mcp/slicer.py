@@ -30,6 +30,7 @@ _TIME_PART_RE = re.compile(r"(\d+)\s*([dhms])")
 _GRAMS_RE = re.compile(r"^; filament used \[g\] = ([\d.]+)", re.M)
 _TYPE_RE = re.compile(r"^; filament_type = (.+)$", re.M)
 _UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+_OUTPUT_LOCKS: dict[Path, asyncio.Lock] = {}
 
 
 class SlicerError(Exception):
@@ -127,6 +128,7 @@ async def slice_model(
     # the last good G-code, and a run that writes nothing can't report stale stats.
     # Unique per call, so two slices of the same model can't share it.
     tmp_path = out_dir / f"{model.stem}.{secrets.token_hex(4)}.partial.gcode"
+    output_lock = _OUTPUT_LOCKS.setdefault(out_path, asyncio.Lock())
 
     cmd = build_command(
         exe,
@@ -136,45 +138,48 @@ async def slice_model(
         print_profile=print_profile,
         material_profile=material_profile,
     )
-    try:
+    async with output_lock:
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except OSError as e:
-            raise SlicerError(f"Cannot start PrusaSlicer at {exe}: {e}") from None
-        try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise SlicerError(f"Slicing timed out after {timeout:g} s") from None
-        except asyncio.CancelledError:
-            proc.kill()
-            await proc.wait()
-            raise
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except OSError as e:
+                raise SlicerError(f"Cannot start PrusaSlicer at {exe}: {e}") from None
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise SlicerError(f"Slicing timed out after {timeout:g} s") from None
+            except asyncio.CancelledError:
+                proc.kill()
+                await proc.wait()
+                raise
 
-        if proc.returncode != 0:
-            tail = stderr.decode("utf-8", errors="replace")[-STDERR_TAIL_CHARS:]
-            raise SlicerError(f"PrusaSlicer failed (exit {proc.returncode}): {tail}")
-        if not tmp_path.is_file():
-            raise SlicerError(f"PrusaSlicer reported success but wrote no {out_path}")
-        # Parse this call's own file before publishing: a parallel slice may
-        # replace out_path right after.
-        stats = parse_gcode_stats(tmp_path)
-        try:
-            os.replace(tmp_path, out_path)
-        except OSError as e:
-            raise SlicerError(
-                f"Cannot write {out_path} (open in another program?): {e}"
-            ) from None
-    finally:
-        # Every exit path (error, timeout, cancel) drops the partial file; a
-        # failed cleanup must not hide the real error.
-        with contextlib.suppress(OSError):
-            tmp_path.unlink(missing_ok=True)
+            if proc.returncode != 0:
+                tail = stderr.decode("utf-8", errors="replace")[-STDERR_TAIL_CHARS:]
+                raise SlicerError(
+                    f"PrusaSlicer failed (exit {proc.returncode}): {tail}"
+                )
+            if not tmp_path.is_file():
+                raise SlicerError(
+                    f"PrusaSlicer reported success but wrote no {out_path}"
+                )
+            stats = parse_gcode_stats(tmp_path)
+            try:
+                os.replace(tmp_path, out_path)
+            except OSError as e:
+                raise SlicerError(
+                    f"Cannot write {out_path} (open in another program?): {e}"
+                ) from None
+        finally:
+            # Every exit path (error, timeout, cancel) drops the partial file; a
+            # failed cleanup must not hide the real error.
+            with contextlib.suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
 
     cost = None
     if db is not None and stats["filament_g"] is not None and stats["print_time_s"]:

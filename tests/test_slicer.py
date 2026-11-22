@@ -323,6 +323,54 @@ async def test_slice_model_uses_unique_partial_path(
 
 
 @pytest.mark.asyncio
+async def test_slice_model_serializes_same_output_path(monkeypatch, model, exe) -> None:
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls = []
+
+    class ControlledProc(FakeProc):
+        def __init__(self, output: Path, profile: str):
+            super().__init__()
+            self.output = output
+            self.profile = profile
+
+        async def communicate(self):
+            if self.profile == "first":
+                first_started.set()
+                await release_first.wait()
+            _write(self.output, f"; profile = {self.profile}\n" + SAMPLE_TAIL)
+            return self._out
+
+    async def fake_exec(*args, **kwargs):
+        calls.append((args, kwargs))
+        output = Path(args[args.index("--output") + 1])
+        profile = args[args.index("--print-profile") + 1]
+        return ControlledProc(output, profile)
+
+    async def slice_and_read(profile: str) -> str:
+        result = await slicer.slice_model(
+            str(model),
+            printer_profile="P",
+            print_profile=profile,
+            material_profile="M",
+            slicer_path=exe,
+        )
+        return Path(result["gcode_path"]).read_text(encoding="utf-8")
+
+    monkeypatch.setattr(slicer.asyncio, "create_subprocess_exec", fake_exec)
+    first = asyncio.create_task(slice_and_read("first"))
+    await first_started.wait()
+    second = asyncio.create_task(slice_and_read("second"))
+    await asyncio.sleep(0)
+    assert len(calls) == 1
+
+    release_first.set()
+    first_gcode, second_gcode = await asyncio.gather(first, second)
+    assert "; profile = first" in first_gcode
+    assert "; profile = second" in second_gcode
+
+
+@pytest.mark.asyncio
 async def test_slice_model_parses_own_file_before_publishing(
     monkeypatch, model, exe, conn
 ) -> None:
