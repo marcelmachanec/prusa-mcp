@@ -472,6 +472,42 @@ async def test_upload_gcode_file_rejects_bad_input(tmp_path: Path) -> None:
         await client.close()
 
 
+@pytest.mark.asyncio
+async def test_upload_gcode_file_locked_file_is_slicer_error(
+    monkeypatch, tmp_path: Path
+) -> None:
+    gcode = _write(tmp_path / "a.gcode", "G1\n")
+
+    def locked(self):
+        raise PermissionError("file is locked")
+
+    monkeypatch.setattr(Path, "read_bytes", locked)
+    client = _client(lambda r: pytest.fail("must not call printer"))
+    try:
+        with pytest.raises(slicer.SlicerError, match="Cannot read"):
+            await slicer.upload_gcode_file(client, str(gcode))
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_slice_model_locked_output_is_slicer_error(
+    monkeypatch, model, exe, conn
+) -> None:
+    def factory(args):
+        out = Path(args[args.index("--output") + 1])
+        return FakeProc(on_run=lambda: _write(out, "G1\n" + SAMPLE_TAIL))
+
+    def locked(src, dst):
+        raise PermissionError("file is locked")
+
+    _patch_exec(monkeypatch, factory)
+    monkeypatch.setattr(slicer.os, "replace", locked)
+    with pytest.raises(slicer.SlicerError, match="Cannot write"):
+        await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
+    assert list(model.parent.glob("*.partial.gcode")) == []
+
+
 # --- optional integration --------------------------------------------------
 
 

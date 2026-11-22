@@ -163,7 +163,12 @@ async def slice_model(
         # Parse this call's own file before publishing: a parallel slice may
         # replace out_path right after.
         stats = parse_gcode_stats(tmp_path)
-        os.replace(tmp_path, out_path)
+        try:
+            os.replace(tmp_path, out_path)
+        except OSError as e:
+            raise SlicerError(
+                f"Cannot write {out_path} (open in another program?): {e}"
+            ) from None
     finally:
         # Every exit path (error, timeout, cancel) drops the partial file.
         tmp_path.unlink(missing_ok=True)
@@ -199,7 +204,10 @@ async def upload_gcode_file(
         raise SlicerError(f"G-code file not found: {gcode_path}")
     if path.suffix.lower() not in (".gcode", ".bgcode"):
         raise SlicerError(f"Unsupported suffix {path.suffix!r}; need .gcode or .bgcode")
-    data = path.read_bytes()
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise SlicerError(f"Cannot read {gcode_path}: {e}") from None
     if not data:
         raise SlicerError(f"G-code file is empty: {gcode_path}")
 
