@@ -291,7 +291,35 @@ async def test_slice_model_failure_keeps_last_good_gcode(
     with pytest.raises(slicer.SlicerError, match="BOOM"):
         await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
     assert good.read_text(encoding="utf-8") == "G1\n" + SAMPLE_TAIL
-    assert not (model.parent / "cube.partial.gcode").exists()
+    assert list(model.parent.glob("*.partial.gcode")) == []
+
+
+@pytest.mark.asyncio
+async def test_slice_model_launch_failure_is_slicer_error(
+    monkeypatch, model, exe, conn
+) -> None:
+    async def broken_exec(*args, **kwargs):
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(slicer.asyncio, "create_subprocess_exec", broken_exec)
+    with pytest.raises(slicer.SlicerError, match="Cannot start PrusaSlicer"):
+        await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
+
+
+@pytest.mark.asyncio
+async def test_slice_model_uses_unique_partial_path(
+    monkeypatch, model, exe, conn
+) -> None:
+    def factory(args):
+        out = Path(args[args.index("--output") + 1])
+        return FakeProc(on_run=lambda: _write(out, "G1\n" + SAMPLE_TAIL))
+
+    calls = _patch_exec(monkeypatch, factory)
+    for _ in range(2):
+        await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
+    outs = [c[0][c[0].index("--output") + 1] for c in calls]
+    assert outs[0] != outs[1]
+    assert all(o.endswith(".partial.gcode") for o in outs)
 
 
 @pytest.mark.asyncio
@@ -313,8 +341,15 @@ async def test_slice_model_bad_output_dir_is_slicer_error(
 
 @pytest.mark.asyncio
 async def test_slice_model_cancel_kills_process(monkeypatch, model, exe, conn) -> None:
-    proc = FakeProc(hang=True)
-    _patch_exec(monkeypatch, lambda a: proc)
+    proc = None
+
+    def factory(args):
+        nonlocal proc
+        out = Path(args[args.index("--output") + 1])
+        proc = FakeProc(hang=True, on_run=lambda: _write(out, "half"))
+        return proc
+
+    _patch_exec(monkeypatch, factory)
     task = asyncio.create_task(
         slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
     )
@@ -323,6 +358,7 @@ async def test_slice_model_cancel_kills_process(monkeypatch, model, exe, conn) -
     with pytest.raises(asyncio.CancelledError):
         await task
     assert proc.killed
+    assert list(model.parent.glob("*.partial.gcode")) == []
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ Nothing here starts a print: uploads always send ``Print-After-Upload: ?0``.
 import asyncio
 import os
 import re
+import secrets
 from pathlib import Path
 
 import aiosqlite
@@ -123,8 +124,8 @@ async def slice_model(
     out_path = out_dir / f"{model.stem}.gcode"
     # Slice into a temp file and swap it in only on success: a failed run keeps
     # the last good G-code, and a run that writes nothing can't report stale stats.
-    tmp_path = out_dir / f"{model.stem}.partial.gcode"
-    tmp_path.unlink(missing_ok=True)
+    # Unique per call, so two slices of the same model can't share it.
+    tmp_path = out_dir / f"{model.stem}.{secrets.token_hex(4)}.partial.gcode"
 
     cmd = build_command(
         exe,
@@ -134,30 +135,35 @@ async def slice_model(
         print_profile=print_profile,
         material_profile=material_profile,
     )
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        tmp_path.unlink(missing_ok=True)
-        raise SlicerError(f"Slicing timed out after {timeout:g} s") from None
-    except asyncio.CancelledError:
-        proc.kill()
-        await proc.wait()
-        raise
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as e:
+            raise SlicerError(f"Cannot start PrusaSlicer at {exe}: {e}") from None
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise SlicerError(f"Slicing timed out after {timeout:g} s") from None
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
 
-    if proc.returncode != 0:
-        tail = stderr.decode("utf-8", errors="replace")[-STDERR_TAIL_CHARS:]
+        if proc.returncode != 0:
+            tail = stderr.decode("utf-8", errors="replace")[-STDERR_TAIL_CHARS:]
+            raise SlicerError(f"PrusaSlicer failed (exit {proc.returncode}): {tail}")
+        if not tmp_path.is_file():
+            raise SlicerError(f"PrusaSlicer reported success but wrote no {out_path}")
+        os.replace(tmp_path, out_path)
+    finally:
+        # Every exit path (error, timeout, cancel) drops the partial file.
         tmp_path.unlink(missing_ok=True)
-        raise SlicerError(f"PrusaSlicer failed (exit {proc.returncode}): {tail}")
-    if not tmp_path.is_file():
-        raise SlicerError(f"PrusaSlicer reported success but wrote no {out_path}")
-    os.replace(tmp_path, out_path)
 
     stats = parse_gcode_stats(out_path)
     cost = None
