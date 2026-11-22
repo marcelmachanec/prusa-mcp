@@ -505,7 +505,21 @@ async def test_slice_model_locked_output_is_slicer_error(
     monkeypatch.setattr(slicer.os, "replace", locked)
     with pytest.raises(slicer.SlicerError, match="Cannot write"):
         await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
+    monkeypatch.undo()
     assert list(model.parent.glob("*.partial.gcode")) == []
+
+
+@pytest.mark.asyncio
+async def test_slice_model_failed_cleanup_keeps_real_error(
+    monkeypatch, model, exe, conn
+) -> None:
+    def locked_unlink(self, missing_ok=False):
+        raise PermissionError("file is locked")
+
+    _patch_exec(monkeypatch, lambda a: FakeProc(1, stderr=b"BOOM"))
+    monkeypatch.setattr(Path, "unlink", locked_unlink)
+    with pytest.raises(slicer.SlicerError, match="BOOM"):
+        await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
 
 
 # --- optional integration --------------------------------------------------

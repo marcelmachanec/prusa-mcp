@@ -4,6 +4,7 @@ Nothing here starts a print: uploads always send ``Print-After-Upload: ?0``.
 """
 
 import asyncio
+import contextlib
 import os
 import re
 import secrets
@@ -170,8 +171,10 @@ async def slice_model(
                 f"Cannot write {out_path} (open in another program?): {e}"
             ) from None
     finally:
-        # Every exit path (error, timeout, cancel) drops the partial file.
-        tmp_path.unlink(missing_ok=True)
+        # Every exit path (error, timeout, cancel) drops the partial file; a
+        # failed cleanup must not hide the real error.
+        with contextlib.suppress(OSError):
+            tmp_path.unlink(missing_ok=True)
 
     cost = None
     if db is not None and stats["filament_g"] is not None and stats["print_time_s"]:

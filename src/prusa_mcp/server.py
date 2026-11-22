@@ -681,7 +681,7 @@ async def slice_model(
             output_dir,
             db=app.db,
         )
-    except slicer.SlicerError as e:
+    except (slicer.SlicerError, OSError) as e:  # file errors -> error JSON too
         return json.dumps({"error": str(e)})
     return json.dumps({"slice": result}, indent=2)
 
@@ -705,7 +705,7 @@ async def upload_gcode(gcode_path: str, overwrite: bool = False) -> str:
         )
     try:
         result = await slicer.upload_gcode_file(app.prusa, gcode_path, overwrite)
-    except slicer.SlicerError as e:
+    except (slicer.SlicerError, OSError) as e:  # file errors -> error JSON too
         return json.dumps({"error": str(e)})
     return json.dumps({"upload": result}, indent=2)
 
