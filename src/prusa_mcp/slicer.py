@@ -160,12 +160,14 @@ async def slice_model(
             raise SlicerError(f"PrusaSlicer failed (exit {proc.returncode}): {tail}")
         if not tmp_path.is_file():
             raise SlicerError(f"PrusaSlicer reported success but wrote no {out_path}")
+        # Parse this call's own file before publishing: a parallel slice may
+        # replace out_path right after.
+        stats = parse_gcode_stats(tmp_path)
         os.replace(tmp_path, out_path)
     finally:
         # Every exit path (error, timeout, cancel) drops the partial file.
         tmp_path.unlink(missing_ok=True)
 
-    stats = parse_gcode_stats(out_path)
     cost = None
     if db is not None and stats["filament_g"] is not None and stats["print_time_s"]:
         result = await _calculate_cost(db, stats)

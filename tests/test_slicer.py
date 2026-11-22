@@ -323,6 +323,24 @@ async def test_slice_model_uses_unique_partial_path(
 
 
 @pytest.mark.asyncio
+async def test_slice_model_parses_own_file_before_publishing(
+    monkeypatch, model, exe, conn
+) -> None:
+    def factory(args):
+        out = Path(args[args.index("--output") + 1])
+        return FakeProc(on_run=lambda: _write(out, "G1\n" + SAMPLE_TAIL))
+
+    calls = _patch_exec(monkeypatch, factory)
+    parsed = []
+    real_parse = slicer.parse_gcode_stats
+    monkeypatch.setattr(
+        slicer, "parse_gcode_stats", lambda p: parsed.append(str(p)) or real_parse(p)
+    )
+    await slicer.slice_model(str(model), **PROFILES, db=conn, slicer_path=exe)
+    assert parsed == [calls[0][0][calls[0][0].index("--output") + 1]]
+
+
+@pytest.mark.asyncio
 async def test_slice_model_bad_output_dir_is_slicer_error(
     monkeypatch, tmp_path, model, exe, conn
 ) -> None:
