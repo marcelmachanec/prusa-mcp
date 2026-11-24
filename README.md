@@ -3,6 +3,16 @@
 MCP server for 3D-print management: filament inventory, print log, cost quotes,
 and live printer status via PrusaLink. Python ≥3.13, SQLite (aiosqlite).
 
+It lets an AI assistant such as Claude run a home print farm in plain language:
+
+- *"How much black PETG is left, and what should I reorder?"* → inventory + shopping list
+- *"Quote a 120 g PLA print that takes 6 hours."* → cost quote from your own material and power prices
+- *"Slice this STL with my presets and send it to the printer."* → PrusaSlicer + PrusaLink upload
+- *"What did I print this month?"* → print log and monthly report, filled in automatically by the watcher
+
+Built test-first: 168 passing tests (schema migrations, concurrent writers,
+rollback, restart replay). Printer actions stop at upload; a human presses start.
+
 ## Setup
 
 ```bash
@@ -102,3 +112,7 @@ ruff check . && ruff format .
 
 Layout: `server.py` (MCP tools, thin) → `db.py` (schema, migrations, queries),
 `prusalink.py` (HTTP client), `models.py` (dataclasses). Agent rules: `AGENTS.md`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
