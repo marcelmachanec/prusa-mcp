@@ -2,6 +2,7 @@
 name = "prusa-mcp"
 version = "0.1.0"
 description = "MCP server for 3D print management with PrusaLink integration"
+license = "MIT"
 readme = "README.md"
 authors = [
     { name = "MarcheloSanchez", email = "131240732+MarcheloSanchez@users.noreply.github.com" }
@@ -23,6 +24,7 @@ camera = [
 
 [project.scripts]
 prusa-mcp = "prusa_mcp:main"
+prusa-watch = "prusa_mcp.watch:main"
 
 [dependency-groups]
 dev = [

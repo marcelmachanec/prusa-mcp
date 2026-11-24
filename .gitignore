@@ -18,3 +18,7 @@ data/*.db
 # Factory run trails (local only)
 .factory/runs/
 .factory/queue/
+
+# Local agent worktrees and side projects (not part of this package)
+.claude/worktrees/
+sites/

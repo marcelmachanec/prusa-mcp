@@ -161,6 +161,12 @@ def _patch_exec(monkeypatch, proc_factory):
 @pytest.mark.asyncio
 async def test_slice_model_success(monkeypatch, tmp_path, model, exe, conn) -> None:
     out_dir = tmp_path / "out"
+    await db.add_filament(
+        conn, brand="Test", material="PLA", color="Red", price=1000, currency="CZK"
+    )
+    await db.add_filament(
+        conn, brand="Test", material="PLA", color="Blue", price=25, currency="EUR"
+    )
 
     def factory(args):
         out = Path(args[args.index("--output") + 1])
@@ -175,6 +181,7 @@ async def test_slice_model_success(monkeypatch, tmp_path, model, exe, conn) -> N
     assert result["filament_g"] == 3.78
     assert result["filament_type"] == "PLA"
     assert "suggested_price" in result["cost_estimate"]
+    assert result["cost_estimate"]["filament_cost"] == 3.78
     assert "shell" not in calls[0][1]
     assert calls[0][0][0] == exe
 
@@ -320,6 +327,54 @@ async def test_slice_model_uses_unique_partial_path(
     outs = [c[0][c[0].index("--output") + 1] for c in calls]
     assert outs[0] != outs[1]
     assert all(o.endswith(".partial.gcode") for o in outs)
+
+
+@pytest.mark.asyncio
+async def test_slice_model_serializes_same_output_path(monkeypatch, model, exe) -> None:
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls = []
+
+    class ControlledProc(FakeProc):
+        def __init__(self, output: Path, profile: str):
+            super().__init__()
+            self.output = output
+            self.profile = profile
+
+        async def communicate(self):
+            if self.profile == "first":
+                first_started.set()
+                await release_first.wait()
+            _write(self.output, f"; profile = {self.profile}\n" + SAMPLE_TAIL)
+            return self._out
+
+    async def fake_exec(*args, **kwargs):
+        calls.append((args, kwargs))
+        output = Path(args[args.index("--output") + 1])
+        profile = args[args.index("--print-profile") + 1]
+        return ControlledProc(output, profile)
+
+    async def slice_and_read(profile: str) -> str:
+        result = await slicer.slice_model(
+            str(model),
+            printer_profile="P",
+            print_profile=profile,
+            material_profile="M",
+            slicer_path=exe,
+        )
+        return Path(result["gcode_path"]).read_text(encoding="utf-8")
+
+    monkeypatch.setattr(slicer.asyncio, "create_subprocess_exec", fake_exec)
+    first = asyncio.create_task(slice_and_read("first"))
+    await first_started.wait()
+    second = asyncio.create_task(slice_and_read("second"))
+    await asyncio.sleep(0)
+    assert len(calls) == 1
+
+    release_first.set()
+    first_gcode, second_gcode = await asyncio.gather(first, second)
+    assert "; profile = first" in first_gcode
+    assert "; profile = second" in second_gcode
 
 
 @pytest.mark.asyncio
@@ -532,7 +587,7 @@ def test_real_cli_supports_no_binary_gcode_flag() -> None:
     out = subprocess.run(
         [slicer.get_slicer_path(), "--help-fff"],
         capture_output=True,
-        text=True,
+        check=True,
         timeout=60,
     ).stdout
-    assert "--binary-gcode" in out
+    assert b"--binary-gcode" in out

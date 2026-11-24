@@ -62,6 +62,7 @@ class PrintJob:
     quoted_price: float | None
     is_quote: bool
     created_at: str
+    printer_job_id: int | None = None
 
     def to_dict(self) -> dict:
         duration_str = None

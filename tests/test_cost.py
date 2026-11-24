@@ -201,3 +201,33 @@ async def test_calculate_cost_zero_weight_returns_error(db):
         db, weight_g=100, print_time_h=1, filament_id=filament.id
     )
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_cost_rejects_selected_non_czk_spool(db):
+    spool = await add_filament(
+        db, brand="Test", material="PLA", color="Blue", price=25, currency="EUR"
+    )
+    result = await calculate_cost(
+        db, weight_g=100, print_time_h=1, filament_id=spool.id
+    )
+    assert "EUR" in result["error"]
+    assert "CZK" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_material_cost_only_uses_czk_prices(db):
+    await add_filament(
+        db, brand="Test", material="PLA", color="Blue", price=25, currency="EUR"
+    )
+    result = await calculate_cost(db, weight_g=100, print_time_h=1, material="PLA")
+    assert result["filament_cost"] == 0
+    assert "No CZK spool price" in result["warning"]
+
+    spool = await add_filament(
+        db, brand="Test", material="PLA", color="Red", price=400, currency="\tczk\n"
+    )
+    for selection in ({"filament_id": spool.id}, {"material": "PLA"}):
+        result = await calculate_cost(db, weight_g=100, print_time_h=1, **selection)
+        assert result["filament_cost"] == 40
+        assert "warning" not in result
