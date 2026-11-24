@@ -161,6 +161,12 @@ def _patch_exec(monkeypatch, proc_factory):
 @pytest.mark.asyncio
 async def test_slice_model_success(monkeypatch, tmp_path, model, exe, conn) -> None:
     out_dir = tmp_path / "out"
+    await db.add_filament(
+        conn, brand="Test", material="PLA", color="Red", price=1000, currency="CZK"
+    )
+    await db.add_filament(
+        conn, brand="Test", material="PLA", color="Blue", price=25, currency="EUR"
+    )
 
     def factory(args):
         out = Path(args[args.index("--output") + 1])
@@ -175,6 +181,7 @@ async def test_slice_model_success(monkeypatch, tmp_path, model, exe, conn) -> N
     assert result["filament_g"] == 3.78
     assert result["filament_type"] == "PLA"
     assert "suggested_price" in result["cost_estimate"]
+    assert result["cost_estimate"]["filament_cost"] == 3.78
     assert "shell" not in calls[0][1]
     assert calls[0][0][0] == exe
 
@@ -580,7 +587,7 @@ def test_real_cli_supports_no_binary_gcode_flag() -> None:
     out = subprocess.run(
         [slicer.get_slicer_path(), "--help-fff"],
         capture_output=True,
-        text=True,
+        check=True,
         timeout=60,
     ).stdout
-    assert "--binary-gcode" in out
+    assert b"--binary-gcode" in out

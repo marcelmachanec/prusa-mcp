@@ -1,3 +1,5 @@
+import asyncio
+
 import aiosqlite
 import pytest
 import pytest_asyncio
@@ -59,6 +61,43 @@ async def test_atomic_deduction(db):
     assert job is not None
     updated = await get_filament(db, filament.id)
     assert updated.remaining_g == 800
+
+
+@pytest.mark.asyncio
+async def test_concurrent_deductions_keep_both_updates(db):
+    filament = await add_filament(db, brand="Test", material="PLA", color="Blue")
+
+    await asyncio.gather(
+        use_filament(db, filament.id, 100),
+        use_filament(db, filament.id, 100),
+    )
+
+    updated = await get_filament(db, filament.id)
+    assert updated.remaining_g == 800
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "grams_used", "remaining_g", "status"),
+    [
+        ("sealed", 850, 150, "active"),
+        ("active", 851, 149, "low"),
+        ("low", 1100, 0, "empty"),
+        ("empty", 1, 999, "active"),
+        ("archived", 1100, 0, "archived"),
+    ],
+)
+async def test_deduction_spool_status_and_opening_date(
+    db, initial_status, grams_used, remaining_g, status
+):
+    filament = await add_filament(db, brand="Test", material="PLA", color="Blue")
+    await update_filament(db, filament.id, status=initial_status, opened="2026-01-01")
+
+    updated = await use_filament(db, filament.id, grams_used)
+
+    assert updated.remaining_g == remaining_g
+    assert updated.status == status
+    assert updated.opened == "2026-01-01"
 
 
 @pytest.mark.asyncio

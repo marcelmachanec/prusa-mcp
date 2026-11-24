@@ -23,6 +23,7 @@ camera = [
 
 [project.scripts]
 prusa-mcp = "prusa_mcp:main"
+prusa-watch = "prusa_mcp.watch:main"
 
 [dependency-groups]
 dev = [

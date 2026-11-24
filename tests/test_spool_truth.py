@@ -183,12 +183,9 @@ async def test_shopping_list(db):
 
     result = await shopping_list(db)
     assert {s["color"] for s in result["to_buy"]} == {"Low", "Empty"}
-    # Low spool: 100 g, the logged prints deduct 30 + 99 (quote also deducts via
-    # log_print), so compare against what is actually stored.
-    stored_low = await get_filament(db, low.id)
     assert result["stock_by_material"]["PLA"] == {
         "spools": 1,  # archived excluded
-        "remaining_g": stored_low.remaining_g,
+        "remaining_g": 70.0,
     }
     assert result["stock_by_material"]["PETG"] == {
         "spools": 2,

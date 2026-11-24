@@ -1,9 +1,11 @@
 import json
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import aiosqlite
 from mcp.server.fastmcp import FastMCP
@@ -19,31 +21,44 @@ DB_PATH = os.environ.get("PRUSA_MCP_DB_PATH", str(PROJECT_DIR / "data" / "prints
 class AppContext:
     db: aiosqlite.Connection
     prusa: PrusaLinkClient | None
+    db_path: str
+    db_uri: bool = False
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
-    # Ensure data directory exists
-    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    path = DB_PATH
+    use_uri = path == ":memory:"
+    if use_uri:
+        # Keep one in-memory database accessible from separate connections.
+        path = f"file:/prusa-mcp-{uuid4().hex}?vfs=memdb"
+    else:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
 
-    conn = await aiosqlite.connect(DB_PATH)
-    await db.init_db(conn)
+    async with aiosqlite.connect(path, uri=use_uri) as conn:
+        await db.init_db(conn)
 
-    prusa = None
-    host = os.environ.get("PRUSA_HOST")
-    api_key = os.environ.get("PRUSA_API_KEY")
-    if host and api_key:
-        prusa = PrusaLinkClient(host, api_key)
+        prusa = None
+        host = os.environ.get("PRUSA_HOST")
+        api_key = os.environ.get("PRUSA_API_KEY")
+        if host and api_key:
+            prusa = PrusaLinkClient(host, api_key)
 
-    try:
-        yield AppContext(db=conn, prusa=prusa)
-    finally:
-        if prusa:
-            await prusa.close()
-        await conn.close()
+        try:
+            yield AppContext(db=conn, prusa=prusa, db_path=path, db_uri=use_uri)
+        finally:
+            if prusa:
+                await prusa.close()
 
 
 mcp = FastMCP("prusa-3d-print-manager", lifespan=lifespan)
+
+
+@asynccontextmanager
+async def _print_log_connection(app: AppContext) -> AsyncIterator[aiosqlite.Connection]:
+    async with aiosqlite.connect(app.db_path, uri=app.db_uri) as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        yield conn
 
 
 # =============================================================================
@@ -348,18 +363,19 @@ async def log_print(
     app: AppContext = ctx.request_context.lifespan_context
     if not started_at:
         started_at = datetime.now().isoformat()
-    job = await db.log_print(
-        app.db,
-        filename=filename,
-        started_at=started_at,
-        finished_at=finished_at,
-        duration_s=duration_s,
-        filament_used_g=filament_used_g,
-        filament_used_m=filament_used_m,
-        filament_id=filament_id,
-        status=status,
-        notes=notes,
-    )
+    async with _print_log_connection(app) as conn:
+        job = await db.log_print(
+            conn,
+            filename=filename,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_s=duration_s,
+            filament_used_g=filament_used_g,
+            filament_used_m=filament_used_m,
+            filament_id=filament_id,
+            status=status,
+            notes=notes,
+        )
     return json.dumps({"logged": job.to_dict()}, indent=2)
 
 
@@ -387,6 +403,35 @@ async def list_prints(
         {"prints": [p.to_dict() for p in prints], "count": len(prints)},
         indent=2,
     )
+
+
+@mcp.tool()
+async def list_unresolved_prints(limit: int = 20) -> str:
+    """List the newest watcher prints with missing spool or usage information."""
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    try:
+        jobs = await db.list_unresolved_prints(app.db, limit)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({"prints": [job.to_dict() for job in jobs], "count": len(jobs)})
+
+
+@mcp.tool()
+async def resolve_print_usage(
+    print_id: int, filament_id: int | None = None, filament_used_g: float | None = None
+) -> str:
+    """Fill missing watcher usage and charge the spool once both fields are known."""
+    ctx = mcp.get_context()
+    app: AppContext = ctx.request_context.lifespan_context
+    try:
+        async with _print_log_connection(app) as conn:
+            job = await db.resolve_print_usage(
+                conn, print_id, filament_id, filament_used_g
+            )
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({"updated": job.to_dict()}, indent=2)
 
 
 @mcp.tool()
@@ -538,19 +583,20 @@ async def calc_print_cost(
     duration_s = int(print_time_h * 3600)
     started_at = datetime.now().isoformat()
 
-    job = await db.log_print(
-        app.db,
-        filename=filename,
-        started_at=started_at,
-        duration_s=duration_s,
-        filament_used_g=weight_g,
-        filament_id=filament_id,
-        status=status,
-        notes=notes,
-        cost_breakdown_json=json.dumps(cost),
-        quoted_price=quoted_price,
-        is_quote=0,
-    )
+    async with _print_log_connection(app) as conn:
+        job = await db.log_print(
+            conn,
+            filename=filename,
+            started_at=started_at,
+            duration_s=duration_s,
+            filament_used_g=weight_g,
+            filament_id=filament_id,
+            status=status,
+            notes=notes,
+            cost_breakdown_json=json.dumps(cost),
+            quoted_price=quoted_price,
+            is_quote=0,
+        )
 
     result = {
         "logged": job.to_dict(),
