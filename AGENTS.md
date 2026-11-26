@@ -39,4 +39,5 @@ MCP server for 3D-print management with PrusaLink integration. Python ≥3.13, S
 1. Read the task file. Work only on paths listed under FILES. Needing another file = stop and report it as an open question.
 2. Don't guess requirements. Ambiguity goes under open questions with status `blocked`.
 3. Run the test command before finishing; fix failures you caused. Run `ruff check` on changed files.
-4. Final message: JSON matching `.agents/result.schema.json`. No prose around it.
+4. Final message: JSON matching `.agents/result.schema.json`. No prose around it. In `tests`, give
+   pass/fail/skip counts per check, and mark any check that was skipped or not run "unverified".
